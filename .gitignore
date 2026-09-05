@@ -1,0 +1,19 @@
+# File di sistema / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Artefatti di build
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/

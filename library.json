@@ -1,0 +1,21 @@
+{
+    "name": "OtamaticClient",
+    "version": "0.1.0",
+    "description": "Client OTA (Over-The-Air) per ESP32 con framework Arduino.",
+    "keywords": "ota, update, firmware, esp32, wireless",
+    "license": "BUSL-1.1",
+    "homepage": "https://github.com/tuo-utente/OtamaticClient",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/tuo-utente/OtamaticClient.git"
+    },
+    "authors": [
+        {
+            "name": "Timothy Franceschi",
+            "email": "timothy@franceschi.es",
+            "maintainer": true
+        }
+    ],
+    "frameworks": "arduino",
+    "platforms": "espressif32"
+}
