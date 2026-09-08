@@ -2,3 +2,18 @@
 # Sintassi Color Mapping - OtamaticClient
 #######################################
 
+OtamaticClient	KEYWORD1
+OtamaticClientEvent	KEYWORD1
+OtamaticVersionCheckData	KEYWORD1
+
+begin	KEYWORD2
+setCheckInterval	KEYWORD2
+requestCheckNow	KEYWORD2
+onEvent	KEYWORD2
+getCheckData	KEYWORD2
+hasUpdateAvailable	KEYWORD2
+clear	KEYWORD2
+isValid	KEYWORD2
+autoRestart	KEYWORD2
+applyUpdate	KEYWORD2
+setAutoUpdate KEYWORD2
