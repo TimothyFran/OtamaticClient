@@ -9,7 +9,9 @@ OtamaticClient::~OtamaticClient() {}
 
 bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
     _firmwareVersion = currentFwVersion;
-    _serviceKey = serviceKey; // TODO: Decide if strncpy is needed
+    
+    strncpy(_serviceKey, serviceKey, sizeof(_serviceKey));
+    _serviceKey[sizeof(_serviceKey) - 1] = 0;
 
     _client->setTimeout(1000);
 

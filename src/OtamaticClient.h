@@ -124,7 +124,7 @@ private:
     uint32_t _checkInterval = 5 * 60 * 1000;
     uint32_t _lastCheck = 0;
     uint32_t _firmwareVersion = 0;
-    const char* _serviceKey = nullptr;
+    char _serviceKey[49] = {0};
     bool _autoUpdate = true;
     bool _autoRestart = true;
 
