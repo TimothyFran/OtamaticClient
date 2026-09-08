@@ -21,8 +21,19 @@ WiFiClient httpClient;
 
 OtamaticClient ota(httpClient);
 
-void onOtaEvent(OtamaticClientEvent event) {
-    Serial.printf(F("[OtamaticClient] Received event: %s\n"), OtamaticClient::getEventName(event));
+void onOtaEvent(OtamaticClientEventData eventData) {
+    Serial.print(F("[OtamaticClient] Received event: "));
+    Serial.print(OtamaticClient::getEventName(eventData.event));
+
+    if (eventData.event == OtamaticClientEvent::UpdateProgress) {
+        // data carries the progress percentage (0-100)
+        Serial.printf(F(" (%u%%)"), eventData.data);
+    } else if (eventData.event == OtamaticClientEvent::UpdateFailed) {
+        // data carries an OtamaticClientError code
+        Serial.printf(F(" (%s)"), OtamaticClient::getErrorName((OtamaticClientError)eventData.data));
+    }
+
+    Serial.println();
 }
 
 void setup() {

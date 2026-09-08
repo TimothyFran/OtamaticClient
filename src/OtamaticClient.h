@@ -48,7 +48,7 @@ public:
      * Set the callback to be called when an event occurs.
      * @param callback The callback to be called.
      */
-    void onEvent(void (*callback)(OtamaticClientEvent));
+    void onEvent(void (*callback)(OtamaticClientEventData));
 
     /**
      * Get the current firmware version, as provided by the
@@ -75,6 +75,13 @@ public:
      * @return The user friendly name of the event.
      */
     static const __FlashStringHelper* getEventName(OtamaticClientEvent event);
+
+    /**
+     * Get the user friendly name of an error code.
+     * @param error The error code.
+     * @return The user friendly name of the error code.
+     */
+    static const __FlashStringHelper* getErrorName(OtamaticClientError error);
 
     /**
      * Get the data of the last version check. It is populated when an
@@ -124,7 +131,7 @@ private:
     uint64_t _deviceId = 0;
 
     Client* _client = nullptr;
-    void (*_onEvent)(OtamaticClientEvent) = nullptr;
+    void (*_onEvent)(OtamaticClientEventData) = nullptr;
 
     OtamaticVersionCheckData _checkData;
 
@@ -133,6 +140,6 @@ private:
 
 
 
-    void transmitEvent(OtamaticClientEvent event) { if (_onEvent) _onEvent(event);}
+    void transmitEvent(OtamaticClientEvent event, uint8_t data = 0) { if (_onEvent) _onEvent(OtamaticClientEventData(event, data)); }
 
 };
