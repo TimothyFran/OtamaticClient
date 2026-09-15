@@ -2,6 +2,7 @@
 #include <esp_mac.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <StreamUtils.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/base64.h>
@@ -117,6 +118,10 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
     char bearer[64] = {0};
     snprintf(bearer, sizeof(bearer), "Bearer %s", _serviceKey);
 
+    // Collect the Transfer-Encoding header so we can detect chunked responses
+    // (HTTP 1.1) before parsing the body. By default, HTTPClient discards headers.
+    const char* transferEncKeys[] = {"Transfer-Encoding"};
+    http.collectHeaders(transferEncKeys, 1);
     http.addHeader("Authorization", bearer);
 
     int httpCode = http.GET();
@@ -126,9 +131,20 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
         return;
     }
 
-    // Ex: {"version":42,"size":425984,"signature":"3046022100f72dfdf25edbde711427f0ef5992bd9511cde26d3481c2ab39158fc06cc46d65022100da337d65de9286bc51ca0d8c893f5262ed33dd8a66250164b5cf1aa38de8caa3","integrity":"cabc6e577acc990ad6dae35b853f2ae62761d66aa5dcad194089f467b10e12a1"}
+    // Ex: {"version":42,"size":425984,...}
+    // Reading the stream directly bypasses HTTPClient's internal chunked
+    // transfer-encoding handling, so when the server answers with
+    // "Transfer-Encoding: chunked" we must decode the chunks first
+    // (see https://github.com/bblanchon/ArduinoJson/issues/1506), otherwise
+    // deserializeJson() fails with an invalid JSON input error.
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, http.getStream());
+    DeserializationError error;
+    if (http.header("Transfer-Encoding") == String("chunked")) {
+        ChunkDecodingStream decodedStream(http.getStream());
+        error = deserializeJson(doc, decodedStream);
+    } else {
+        error = deserializeJson(doc, http.getStream());
+    }
     http.end();
     if (error) {
         log_e("JSON deserialization failed: %s", error.c_str());
@@ -184,6 +200,10 @@ bool OtamaticClient::applyUpdate() {
     char bearer[64] = {0};
     snprintf(bearer, sizeof(bearer), "Bearer %s", _serviceKey);
 
+    // Collect the Transfer-Encoding header to detect chunked responses (HTTP 1.1)
+    const char* transferEncKeys[] = {"Transfer-Encoding"};
+    http.collectHeaders(transferEncKeys, 1);
+
     http.addHeader("Authorization", bearer);
 
     int httpCode = http.GET();
@@ -228,8 +248,13 @@ bool OtamaticClient::applyUpdate() {
         return false;
     }
 
-    // Download the binary in chunks and write it to the OTA partition
-    Stream* stream = http.getStreamPtr();
+    // Download the binary in chunks and write it to the OTA partition.
+    // Reading the raw stream bypasses HTTPClient's chunked transfer-encoding
+    // handling: if the body is chunked, the chunk markers would corrupt the
+    // firmware image written to flash, so decode the chunks first.
+    const bool isChunked = http.header("Transfer-Encoding") == String("chunked");
+    ChunkDecodingStream decodedStream(http.getStream());
+    Stream* stream = isChunked ? static_cast<Stream*>(&decodedStream) : http.getStreamPtr();
     uint8_t buffer[1024];
     size_t written = 0;
     uint32_t lastProgress = 0;

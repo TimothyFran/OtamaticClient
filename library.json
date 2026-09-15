@@ -23,6 +23,11 @@
             "owner": "bblanchon",
             "name": "ArduinoJson",
             "version": "^7.0.0"
+        },
+        {
+            "owner": "bblanchon",
+            "name": "StreamUtils",
+            "version": "^1.9.0"
         }
     ]
 }
