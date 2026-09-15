@@ -2,6 +2,10 @@
 #include <esp_mac.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/pk.h>
+#include <mbedtls/base64.h>
+#include <string.h>
 
 OtamaticClient::OtamaticClient(Client& client) : _client(&client) {}
 
@@ -10,8 +14,7 @@ OtamaticClient::~OtamaticClient() {}
 bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
     _firmwareVersion = currentFwVersion;
 
-    strncpy(_serviceKey, serviceKey, sizeof(_serviceKey));
-    _serviceKey[sizeof(_serviceKey) - 1] = 0;
+    strlcpy(_serviceKey, serviceKey != nullptr ? serviceKey : "", sizeof(_serviceKey));
 
     _client->setTimeout(1000);
 
@@ -20,12 +23,62 @@ bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
 }
 
 void OtamaticClient::loop() {
-    if (millis() - _lastCheck < _checkInterval) return;
-    requestCheckNow(true);
+    if (millis() - _lastCheck >= _checkInterval) requestCheckNow();
 }
 
 void OtamaticClient::onEvent(void (*callback)(OtamaticClientEventData)) {
     _onEvent = callback;
+}
+
+void OtamaticClient::setPublicKey(const char* key) {
+    if (key == nullptr) key = "";
+    // Allow PEM keys to be supplied with leading whitespace.
+    while (*key == ' ' || *key == '\t' || *key == '\r' || *key == '\n') key++;
+    strlcpy(_publicKey, key, sizeof(_publicKey));
+    if (key[0] != '\0' && strnlen(key, sizeof(_publicKey)) >= sizeof(_publicKey) - 1) {
+        log_w("Public key truncated to %u characters, verification will likely fail", (unsigned)(sizeof(_publicKey) - 1));
+    }
+}
+
+/**
+ * Decode the server-provided signature.
+ * Expected format: hex-encoded DER signature, i.e. the DER bytes of
+ * SEQUENCE { INTEGER r, INTEGER s } serialized as a hex string.
+ * @return true on success; outLen is the length of the decoded DER signature.
+ */
+static bool decodeSignature(const char* hex, uint8_t* out, size_t outSize, size_t& outLen) {
+    size_t len = strlen(hex);
+    if (len == 0 || (len % 2) != 0 || len / 2 > outSize) return false;
+
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+
+    for (size_t i = 0; i < len; i += 2) {
+        int hi = nibble(hex[i]);
+        int lo = nibble(hex[i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i / 2] = (uint8_t)((hi << 4) | lo);
+    }
+    outLen = len / 2;
+
+    // Validate the DER envelope: SEQUENCE { INTEGER r, INTEGER s }.
+    if (outLen < 8 || out[0] != 0x30 || out[1] != outLen - 2 || out[2] != 0x02) {
+        return false;
+    }
+
+    size_t pos = 3;
+    size_t rLen = out[pos++];
+    if (rLen == 0 || pos + rLen + 2 > outLen || out[pos + rLen] != 0x02) {
+        return false;
+    }
+
+    pos += rLen + 1;
+    size_t sLen = out[pos++];
+    return sLen > 0 && pos + sLen == outLen;
 }
 
 uint64_t OtamaticClient::getDeviceId() {
@@ -42,10 +95,9 @@ uint64_t OtamaticClient::getDeviceId() {
 }
 
 void OtamaticClient::requestCheckNow(bool restartCounter) {
-    uint32_t prevCheck = _lastCheck;
     if (restartCounter) _lastCheck = millis();
 
-    // Clear the previously stored version data at the start of every check
+    // Discard metadata from the previous update check.
     _checkData.clear();
 
     transmitEvent(OtamaticClientEvent::CheckingForUpdate);
@@ -59,31 +111,27 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
     NetworkClient& netClient = *static_cast<NetworkClient*>(_client);
     if(! http.begin(netClient, _serverHost, _serverPort, _checkPath)) {
         log_e("HTTP begin failed (check, host: %s:%u)", _serverHost, _serverPort);
-        _lastCheck = prevCheck;
         return;
     }
 
-    char bearer[64];
-    sprintf(bearer, "Bearer %s", _serviceKey);
+    char bearer[64] = {0};
+    snprintf(bearer, sizeof(bearer), "Bearer %s", _serviceKey);
 
-    http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", bearer);
 
     int httpCode = http.GET();
     if (httpCode != 200) {
         log_e("Version check HTTP request failed, code: %d", httpCode);
         http.end();
-        _lastCheck = prevCheck;
         return;
     }
 
-    // Ex: {"version":42,"size":425984,"signature":"c2VjcmV0LXN0YXRpYy10ZXN0LXNpZ25hdHVyZQ==","integrity":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}
+    // Ex: {"version":42,"size":425984,"signature":"3046022100f72dfdf25edbde711427f0ef5992bd9511cde26d3481c2ab39158fc06cc46d65022100da337d65de9286bc51ca0d8c893f5262ed33dd8a66250164b5cf1aa38de8caa3","integrity":"cabc6e577acc990ad6dae35b853f2ae62761d66aa5dcad194089f467b10e12a1"}
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, http.getStream());
     http.end();
     if (error) {
         log_e("JSON deserialization failed: %s", error.c_str());
-        _lastCheck = prevCheck;
         return;
     }
 
@@ -94,13 +142,15 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
         return;
     }
 
-    log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)doc["size"] | 0UL);
+    log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)(doc["size"] | 0UL));
 
-    // Memorize new version data for later use (e.g. download and verification)
+    // Store metadata for the update download and verification.
     _checkData.version = newVersion;
     _checkData.size = doc["size"] | 0;
     _checkData.setSignature(doc["signature"] | "");
     _checkData.setIntegrity(doc["integrity"] | "");
+    log_i("Signature: %s", _checkData.getSignature());
+    log_i("Integrity: %s", _checkData.getIntegrity());
 
     transmitEvent(OtamaticClientEvent::UpdateAvailable);
 
@@ -134,7 +184,6 @@ bool OtamaticClient::applyUpdate() {
     char bearer[64] = {0};
     snprintf(bearer, sizeof(bearer), "Bearer %s", _serviceKey);
 
-    http.addHeader("Content-Type", "application/octet-stream");
     http.addHeader("Authorization", bearer);
 
     int httpCode = http.GET();
@@ -161,6 +210,23 @@ bool OtamaticClient::applyUpdate() {
     }
 
     log_i("Update started, version: %lu, size: %lu", (unsigned long)_checkData.version, (unsigned long)_checkData.size);
+
+    // Integrity is always verified. Signature verification is performed when
+    // both the server provided a signature and a public key has been configured.
+    const bool checkSignature = _checkData.signature[0] != '\0' && _publicKey[0] != '\0';
+    if (_checkData.signature[0] != '\0' && ! checkSignature) {
+        log_w("Signature provided by the server but no public key set, skipping signature verification");
+    }
+
+    mbedtls_sha256_context shaCtx;
+    mbedtls_sha256_init(&shaCtx);
+    if (mbedtls_sha256_starts(&shaCtx, 0) != 0) {
+        mbedtls_sha256_free(&shaCtx);
+        Update.abort();
+        log_e("Failed to initialize SHA-256 context");
+        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
+        return false;
+    }
 
     // Download the binary in chunks and write it to the OTA partition
     Stream* stream = http.getStreamPtr();
@@ -205,6 +271,8 @@ bool OtamaticClient::applyUpdate() {
         }
         written += w;
 
+        mbedtls_sha256_update(&shaCtx, buffer, (size_t)read);
+
         // Emit the progress event only when the percentage changes
         uint32_t progress = (uint32_t)((uint64_t)written * 100 / _checkData.size);
         if (progress != lastProgress) {
@@ -216,10 +284,34 @@ bool OtamaticClient::applyUpdate() {
 
     http.end();
 
+    // Finalize the SHA-256 digest. The same digest is used for integrity and signature verification.
+    uint8_t integrityHash[32] = {0};
+    bool ctxOk = mbedtls_sha256_finish(&shaCtx, integrityHash) == 0;
+    mbedtls_sha256_free(&shaCtx);
+
+    if (! ctxOk) {
+        failed = true;
+        failedError = OtamaticClientError::IntegrityFailed;
+    }
+
     if (failed || written != _checkData.size) {
         Update.abort();
         log_e("%s (written: %lu/%lu)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(failedError)), (unsigned long)written, (unsigned long)_checkData.size);
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)failedError);
+        return false;
+    }
+
+    // Verify the firmware integrity.
+    if (! verifyIntegrity(integrityHash)) {
+        Update.abort();
+        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
+        return false;
+    }
+
+    // Verify the firmware signature when both signature and public key are available.
+    if (checkSignature && ! verifySignature(integrityHash)) {
+        Update.abort();
+        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::SignatureFailed);
         return false;
     }
 
@@ -239,6 +331,86 @@ bool OtamaticClient::applyUpdate() {
 }
 
 
+
+bool OtamaticClient::verifyIntegrity(const uint8_t* integrityHash) {
+    if (_checkData.integrity[0] == '\0' || strlen(_checkData.integrity) != 64) {
+        log_e("%s (invalid integrity value in check data)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::IntegrityFailed)));
+        return false;
+    }
+
+    // Convert the computed hash to lowercase hex and compare
+    char computedHex[65] = {0};
+    for (size_t i = 0; i < 32; i++) {
+        snprintf(computedHex + i * 2, 3, "%02x", integrityHash[i]);
+    }
+    if (strcasecmp(computedHex, _checkData.integrity) != 0) {
+        log_e("%s (expected: %s, computed: %s)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::IntegrityFailed)),
+              _checkData.integrity, computedHex);
+        return false;
+    }
+
+    log_d("Integrity check passed");
+    return true;
+}
+
+bool OtamaticClient::verifySignature(const uint8_t* integrityHash) {
+
+    uint8_t sig[80] = {0};
+    size_t sigLen = 0;
+
+    if (!decodeSignature(_checkData.signature, sig, sizeof(sig), sigLen)) {
+        log_e("Unsupported or malformed signature");
+        return false;
+    }
+
+    // Parse the key (PEM or Base64-encoded DER/SPKI)
+    mbedtls_pk_context pkCtx;
+    mbedtls_pk_init(&pkCtx);
+    int pkRes;
+    if (strncmp(_publicKey, "-----BEGIN", 10) == 0) {
+        if (strstr(_publicKey, "PUBLIC KEY") != nullptr) {
+            // PEM public key: must be null-terminated, length includes the terminator
+            pkRes = mbedtls_pk_parse_public_key(&pkCtx, (const uint8_t*)_publicKey, strlen(_publicKey) + 1);
+        } else {
+            log_e("Unsupported PEM key format");
+            mbedtls_pk_free(&pkCtx);
+            return false;
+        }
+    } else {
+        // DER or Base64-encoded DER
+        uint8_t der[256] = {0};
+        size_t derLen = 0;
+        if (mbedtls_base64_decode(der, sizeof(der), &derLen,
+                                  (const uint8_t*)_publicKey, strlen(_publicKey)) != 0) {
+            derLen = strlen(_publicKey);
+            memcpy(der, _publicKey, derLen);
+        }
+        pkRes = mbedtls_pk_parse_public_key(&pkCtx, der, derLen);
+        memset(der, 0, sizeof(der));
+    }
+    if (pkRes != 0) {
+        log_e("%s (public key parse error: -0x%04x)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::SignatureFailed)), -pkRes);
+        mbedtls_pk_free(&pkCtx);
+        return false;
+    }
+
+    // Verify the ECDSA P-256 signature using the SHA-256 digest computed from the firmware.
+    // The digest passed to mbedtls_pk_verify() is already SHA-256; it is not hashed again.
+    int verRes = mbedtls_pk_verify(&pkCtx, MBEDTLS_MD_SHA256,
+                                   integrityHash, 32, sig, sigLen);
+    mbedtls_pk_free(&pkCtx);
+    if (verRes != 0) {
+        log_e("%s (mbedtls_pk_verify error: -0x%04x)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::SignatureFailed)), -verRes);
+        return false;
+    }
+
+    log_d("Signature check passed");
+    return true;
+}
 
 const __FlashStringHelper* OtamaticClient::getEventName(OtamaticClientEvent event) {
     switch (event) {
@@ -264,6 +436,8 @@ const __FlashStringHelper* OtamaticClient::getErrorName(OtamaticClientError erro
         case OtamaticClientError::DownloadFailed: return F("Download failed");
         case OtamaticClientError::WriteFailed: return F("Write failed");
         case OtamaticClientError::EndFailed: return F("Verification failed");
+        case OtamaticClientError::IntegrityFailed: return F("Integrity check failed");
+        case OtamaticClientError::SignatureFailed: return F("Signature check failed");
         default: return F("Unknown error");
     }
 }

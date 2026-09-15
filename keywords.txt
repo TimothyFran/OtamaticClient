@@ -19,3 +19,4 @@ isValid	KEYWORD2
 autoRestart	KEYWORD2
 applyUpdate	KEYWORD2
 setAutoUpdate KEYWORD2
+setPublicKey	KEYWORD2

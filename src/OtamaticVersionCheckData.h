@@ -8,8 +8,12 @@
  */
 class OtamaticVersionCheckData {
 public:
-    /** Maximum length (excluding the null terminator) of the signature buffer. */
-    static constexpr size_t kSignatureMaxLen = 128;
+    /**
+     * Maximum length (excluding the null terminator) of the signature buffer.
+     * Sized to hold the hex encoding of an ECDSA P-256 signature in DER form
+     * (max ~72 bytes -> 144 hex chars).
+     */
+    static constexpr size_t kSignatureMaxLen = 144;
 
     /** Maximum length (excluding the null terminator) of the integrity buffer. */
     static constexpr size_t kIntegrityMaxLen = 64;
@@ -20,7 +24,7 @@ public:
     /** The size in bytes of the new firmware binary. */
     uint32_t size = 0;
 
-    /** The Base64-encoded signature of the new firmware. */
+    /** The hex-encoded signature of the new firmware. */
     char signature[kSignatureMaxLen + 1] = {0};
 
     /** The integrity hash (e.g. SHA-256) of the new firmware. */
@@ -38,7 +42,7 @@ public:
 
     /**
      * Copy the given signature into the internal buffer.
-     * @param signature The Base64-encoded signature.
+     * @param signature The hex-encoded signature.
      */
     void setSignature(const char* signature) {
         strlcpy(this->signature, signature != nullptr ? signature : "", sizeof(this->signature));
@@ -54,7 +58,7 @@ public:
 
     /**
      * Get the signature as a read-only string.
-     * @return The Base64-encoded signature, or an empty string if not available.
+     * @return The hex-encoded signature, or an empty string if not available.
      */
     const char* getSignature() const { return signature; }
 

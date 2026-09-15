@@ -115,6 +115,13 @@ public:
      */
     void setAutoRestart(bool enable) { _autoRestart = enable; }
 
+    /**
+     * Set the ECDSA public key used to verify the firmware signature
+     * (ECDSA over NIST P-256 with SHA-256 on the downloaded firmware).
+     * @param key The public key in PEM or Base64-encoded DER (SPKI) format.
+     */
+    void setPublicKey(const char* key);
+
 private:
 
     const char* _serverHost = "192.168.1.17";
@@ -124,6 +131,7 @@ private:
     uint32_t _lastCheck = 0;
     uint32_t _firmwareVersion = 0;
     char _serviceKey[49] = {0};
+    char _publicKey[512] = {0};
     bool _autoUpdate = true;
     bool _autoRestart = true;
 
@@ -137,7 +145,21 @@ private:
     /** Maximum time in milliseconds to wait for incoming data before considering the download stalled. */
     static constexpr uint32_t kUpdateStallTimeout = 10000;
 
+    /**
+     * Verify the SHA-256 integrity hash of the downloaded firmware against
+     * the value provided by the server.
+     * @param integrityHash The computed SHA-256 digest (32 bytes).
+     * @return true if the integrity check passed.
+     */
+    bool verifyIntegrity(const uint8_t* integrityHash);
 
+    /**
+     * Verify the ECDSA signature of the downloaded firmware over its
+     * SHA-256 digest, using the configured public key.
+     * @param integrityHash The computed SHA-256 digest (32 bytes).
+     * @return true if the signature check passed.
+     */
+    bool verifySignature(const uint8_t* integrityHash);
 
     void transmitEvent(OtamaticClientEvent event, uint8_t data = 0) { if (_onEvent) _onEvent(OtamaticClientEventData(event, data)); }
 

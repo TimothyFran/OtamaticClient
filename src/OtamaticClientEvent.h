@@ -27,7 +27,9 @@ enum class OtamaticClientError : uint8_t {
     BeginFailed,        // Could not reserve the OTA partition (no space, partition issue...)
     DownloadFailed,     // Download stalled or connection dropped
     WriteFailed,        // Error while writing the firmware into the OTA partition
-    EndFailed           // Final image verification failed
+    EndFailed,          // Final image verification failed
+    IntegrityFailed,    // The integrity hash of the downloaded firmware does not match
+    SignatureFailed     // The signature of the downloaded firmware does not match
 };
 
 /**
