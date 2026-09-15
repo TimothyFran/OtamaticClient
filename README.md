@@ -23,55 +23,112 @@ any Arduino `Client` implementation, so it works over Wi-Fi, Ethernet and GSM,
 in both HTTP and HTTPS (depending on the client class you pass in).
 
 ```cpp
+#include <Arduino.h>
 #include <OtamaticClient.h>
 #include <WiFi.h>
+
+#define FIRMWARE_VERSION 1
 
 WiFiClient httpClient;               // HTTP over Wi-Fi
 // WiFiClientSecure httpClient;      // HTTPS over Wi-Fi (setCABundle/setInsecure)
 // EthernetClient httpClient;        // HTTP over Ethernet (Arduino Ethernet)
 // TinyGsmClient httpClient(modem);  // HTTP over GSM/LTE (TinyGSM)
 
-OtamaticClient ota;
+OtamaticClient ota(httpClient);      // the referenced client must outlive `ota`
+
+void onOtaEvent(OtamaticClientEventData eventData) {
+    // Handle the update lifecycle events (see "Events" below)
+}
 
 void setup() {
     // ... connect your network first ...
-    ota.begin(FIRMWARE_VERSION, httpClient, "ota.example.com", 80, "/api/v1/devices/check");
+    ota.begin(FIRMWARE_VERSION, "your-otamatic-service-key");
+    ota.setCheckInterval(5 * 60 * 1000);  // check every 5 minutes
     ota.onEvent(onOtaEvent);
 }
 
 void loop() {
-    ota.loop();
+    ota.loop();  // performs a version check on every check interval
 }
 ```
 
-A complete example is available in [examples/WiFiBasic](examples/WiFiBasic/WiFiBasic.ino).
+A complete example is available in [examples/AdvancedExample](examples/AdvancedExample/AdvancedExample.ino).
 
-### Server API
+### Configuration
 
-The client asks the server whether a new firmware is available:
+- `setCheckInterval(interval)`: milliseconds between two automatic checks
+  (default: 5 minutes).
+- `requestCheckNow(restartCounter)`: force an immediate check; pass `false` to
+  keep the interval counter running.
+- `setDeviceId(id)` / `getDeviceId()`: by default the device ID is derived from
+  the ESP32 station MAC address; a custom ID can be set before the first check.
+- `setAutoUpdate(enable)`: when disabled (default: enabled), an available
+  update is only reported through the `UpdateAvailable` event and must be
+  applied manually with `applyUpdate()`.
+- `setAutoRestart(enable)`: when disabled (default: enabled), the device is not
+  rebooted automatically after a successful update; restart it with
+  `ESP.restart()` when the `UpdateCompleted` event is received.
+- `setPublicKey(key)`: ECDSA public key (PEM or Base64-encoded DER, SPKI) used
+  to verify the firmware signature. See "Firmware verification".
+- `firmwareVersion()` / `getCheckData()` / `hasUpdateAvailable()`: inspect the
+  running version and the result of the last version check. The check data is
+  populated when an update is found and cleared at the beginning of every new
+  check; it is not persisted across reboots.
 
-```
-GET /api/v1/devices/check?version=<current>&chip=<model>
-```
+### Events
 
-The endpoint must answer with `200 OK` and a JSON body:
+`onEvent(callback)` registers a handler invoked with `OtamaticClientEventData`
+(event type plus a `uint8_t` payload):
 
-```json
-{ "version": 2, "url": "/api/v1/devices/firmware.bin" }
-```
+| Event | Payload | Meaning |
+| ----- | ------- | ------- |
+| `CheckingForUpdate` | – | A version check cycle started |
+| `UpdateAvailable` | – | A new firmware version was found |
+| `UpdateNotNeeded` | – | No update available |
+| `UpdateStarted` | – | Writing of the new firmware started |
+| `UpdateProgress` | Progress % (0-100) | Firmware write progress |
+| `UpdateCompleted` | – | Update completed (device ready to reboot) |
+| `UpdateFailed` | `OtamaticClientError` code | Update failed, see below |
 
-- `version`: the latest available firmware version (number). If it is greater
-  than the running one, the client downloads and flashes the firmware.
-- `url`: path (or absolute URL on the same host) of the firmware binary. The
-  firmware is downloaded over the same `Client` connection, i.e. from the same
-  host and port used for the check.
+Error codes reported with `UpdateFailed`:
+
+| Code | Meaning |
+| ---- | ------- |
+| `None` | No error (default payload) |
+| `InvalidCheckData` | No valid version check result when applying the update |
+| `ConnectionFailed` | Could not establish the connection to the server |
+| `HttpFailed` | The server answered with an unexpected HTTP status |
+| `InvalidFirmware` | The firmware binary size is invalid |
+| `BeginFailed` | Could not reserve the OTA partition (no space, partition issue...) |
+| `DownloadFailed` | Download stalled or connection dropped |
+| `WriteFailed` | Error while writing the firmware into the OTA partition |
+| `EndFailed` | Final image verification failed |
+| `IntegrityFailed` | The integrity hash of the downloaded firmware does not match |
+| `SignatureFailed` | The signature of the downloaded firmware does not match |
+
+### Firmware verification
+
+After the download, the client always verifies the SHA-256 integrity hash of
+the firmware against the value provided by the server. When the server also
+provides a signature and a public key has been configured with
+`setPublicKey()`, the firmware signature is verified as well (ECDSA over
+NIST P-256 with SHA-256). If a signature is provided but no public key is set,
+the signature check is skipped and a warning is logged.
+
+### Examples
+
+| Example | Description |
+| ------- | ----------- |
+| [WiFiBasic](examples/WiFiBasic/WiFiBasic.ino) | Basic Wi-Fi setup with automatic check and update |
+| [SignatureExample](examples/SignatureExample/SignatureExample.ino) | Adds firmware signature verification with a public key |
+| [AdvancedExample](examples/AdvancedExample/AdvancedExample.ino) | Signature verification with manual update and restart control via events |
 
 ### Transport notes
 
 | Transport | Client class | Notes |
 | --------- | ------------ | ----- |
-| Wi-Fi (HTTP) | `WiFiClient` / `NetworkClient` | Port 80 |
-| Wi-Fi (HTTPS) | `WiFiClientSecure` | Port 443, call `setCABundle()` (or `setInsecure()` for development only) |
+| Wi-Fi (HTTP) | `WiFiClient` / `NetworkClient` | Plain HTTP |
+| Wi-Fi (HTTPS) | `WiFiClientSecure` | Call `setCABundle()` (or `setInsecure()` for development only) |
 | Ethernet | `EthernetClient` | Any `Client` with TLS support works for HTTPS |
 | GSM/LTE | `TinyGsmClient` (TinyGSM) | Power on the modem before calling `ota.begin()` |
 
