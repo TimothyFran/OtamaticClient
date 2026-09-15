@@ -119,7 +119,6 @@ private:
 
     const char* _serverHost = "192.168.1.17";
     uint16_t _serverPort = 8000;
-    const char* _fetchPath = "/api/v1/ota/download";
 
     uint32_t _checkInterval = 5 * 60 * 1000;
     uint32_t _lastCheck = 0;
