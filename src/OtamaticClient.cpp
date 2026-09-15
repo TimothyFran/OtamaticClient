@@ -9,12 +9,13 @@ OtamaticClient::~OtamaticClient() {}
 
 bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
     _firmwareVersion = currentFwVersion;
-    
+
     strncpy(_serviceKey, serviceKey, sizeof(_serviceKey));
     _serviceKey[sizeof(_serviceKey) - 1] = 0;
 
     _client->setTimeout(1000);
 
+    log_i("Initialized, firmware version: %lu", (unsigned long)_firmwareVersion);
     return true;
 }
 
@@ -57,6 +58,7 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
 
     NetworkClient& netClient = *static_cast<NetworkClient*>(_client);
     if(! http.begin(netClient, _serverHost, _serverPort, _checkPath)) {
+        log_e("HTTP begin failed (check, host: %s:%u)", _serverHost, _serverPort);
         _lastCheck = prevCheck;
         return;
     }
@@ -66,28 +68,33 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
 
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", bearer);
-    
+
     int httpCode = http.GET();
     if (httpCode != 200) {
+        log_e("Version check HTTP request failed, code: %d", httpCode);
         http.end();
         _lastCheck = prevCheck;
         return;
     }
-    
+
     // Ex: {"version":42,"size":425984,"signature":"c2VjcmV0LXN0YXRpYy10ZXN0LXNpZ25hdHVyZQ==","integrity":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, http.getStream());
     http.end();
     if (error) {
+        log_e("JSON deserialization failed: %s", error.c_str());
         _lastCheck = prevCheck;
         return;
     }
-    
+
     uint32_t newVersion = doc["version"];
     if (newVersion <= _firmwareVersion) {
+        log_i("No update needed (current: %lu, remote: %lu)", (unsigned long)_firmwareVersion, (unsigned long)newVersion);
         transmitEvent(OtamaticClientEvent::UpdateNotNeeded);
         return;
     }
+
+    log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)doc["size"] | 0UL);
 
     // Memorize new version data for later use (e.g. download and verification)
     _checkData.version = newVersion;
@@ -104,6 +111,7 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
 
 bool OtamaticClient::applyUpdate() {
     if (! _checkData.isValid()) {
+        log_e("%s", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidCheckData)));
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidCheckData);
         return false;
     }
@@ -118,6 +126,7 @@ bool OtamaticClient::applyUpdate() {
 
     NetworkClient& netClient = *static_cast<NetworkClient*>(_client);
     if(! http.begin(netClient, _serverHost, _serverPort, _fetchPath)) {
+        log_e("%s (host: %s:%u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::ConnectionFailed)), _serverHost, _serverPort);
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::ConnectionFailed);
         return false;
     }
@@ -130,12 +139,14 @@ bool OtamaticClient::applyUpdate() {
 
     int httpCode = http.GET();
     if (httpCode != 200) {
+        log_e("%s, HTTP code: %d", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::HttpFailed)), httpCode);
         http.end();
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::HttpFailed);
         return false;
     }
 
     if (_checkData.size == 0) {
+        log_e("%s (size: 0)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidFirmware)));
         http.end();
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return false;
@@ -143,10 +154,13 @@ bool OtamaticClient::applyUpdate() {
 
     // Reserve the OTA partition for the expected firmware size
     if (! Update.begin(_checkData.size, U_FLASH)) {
+        log_e("%s (Update.begin error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::BeginFailed)), Update.getError());
         http.end();
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::BeginFailed);
         return false;
     }
+
+    log_i("Update started, version: %lu, size: %lu", (unsigned long)_checkData.version, (unsigned long)_checkData.size);
 
     // Download the binary in chunks and write it to the OTA partition
     Stream* stream = http.getStreamPtr();
@@ -162,6 +176,8 @@ bool OtamaticClient::applyUpdate() {
         if (avail <= 0) {
             // No data available: bail out if the connection dropped or stalled
             if (! http.connected() || millis() - stallStart > kUpdateStallTimeout) {
+                log_w("Download stalled for %lu ms or connection dropped (written: %lu/%lu)",
+                      (unsigned long)(millis() - stallStart), (unsigned long)written, (unsigned long)_checkData.size);
                 failed = true;
                 failedError = OtamaticClientError::DownloadFailed;
                 break;
@@ -174,6 +190,7 @@ bool OtamaticClient::applyUpdate() {
         size_t chunk = (size_t)avail < sizeof(buffer) ? (size_t)avail : sizeof(buffer);
         int read = stream->readBytes(buffer, chunk);
         if (read <= 0) {
+            log_e("%s (readBytes returned %d)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::DownloadFailed)), read);
             failed = true;
             failedError = OtamaticClientError::DownloadFailed;
             break;
@@ -181,6 +198,7 @@ bool OtamaticClient::applyUpdate() {
 
         size_t w = Update.write(buffer, (size_t)read);
         if (w != (size_t)read) {
+            log_e("%s (requested: %d, written: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::WriteFailed)), read, (unsigned)w);
             failed = true;
             failedError = OtamaticClientError::WriteFailed;
             break;
@@ -191,6 +209,7 @@ bool OtamaticClient::applyUpdate() {
         uint32_t progress = (uint32_t)((uint64_t)written * 100 / _checkData.size);
         if (progress != lastProgress) {
             lastProgress = progress;
+            log_d("Update progress: %lu%% (%lu/%lu bytes)", (unsigned long)progress, (unsigned long)written, (unsigned long)_checkData.size);
             transmitEvent(OtamaticClientEvent::UpdateProgress, (uint8_t)progress);
         }
     }
@@ -199,12 +218,18 @@ bool OtamaticClient::applyUpdate() {
 
     if (failed || written != _checkData.size) {
         Update.abort();
+        log_e("%s (written: %lu/%lu)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(failedError)), (unsigned long)written, (unsigned long)_checkData.size);
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)failedError);
         return false;
     }
 
     // Finalize: verifies the written image and switches the boot partition
     bool success = Update.end();
+    if (! success) {
+        log_e("%s (Update.end error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::EndFailed)), Update.getError());
+    } else {
+        log_i("Update completed, version: %lu", (unsigned long)_checkData.version);
+    }
     transmitEvent(success ? OtamaticClientEvent::UpdateCompleted : OtamaticClientEvent::UpdateFailed,
                   success ? (uint8_t)OtamaticClientError::None : (uint8_t)OtamaticClientError::EndFailed);
 
