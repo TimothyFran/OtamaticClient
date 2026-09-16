@@ -195,6 +195,13 @@ private:
     bool applyUpdateInternal();
 
     /**
+     * Get the size in bytes of the free OTA update partition,
+     * or 0 if no OTA partition is available.
+     * @return The OTA partition size in bytes.
+     */
+    uint32_t getOtaPartitionSize() const;
+
+    /**
      * Build the "Bearer <serviceKey>" Authorization header value into
      * the provided buffer, logging a warning if the key is truncated.
      * @param buffer The destination buffer.

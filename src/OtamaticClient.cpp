@@ -1,5 +1,6 @@
 #include "OtamaticClient.h"
 #include <esp_mac.h>
+#include <esp_ota_ops.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <StreamUtils.h>
@@ -107,6 +108,11 @@ uint64_t OtamaticClient::getDeviceId() {
     return mac64;
 }
 
+uint32_t OtamaticClient::getOtaPartitionSize() const {
+    const esp_partition_t* part = esp_ota_get_next_update_partition(nullptr);
+    return part != nullptr ? part->size : 0;
+}
+
 void OtamaticClient::requestCheckNow(bool restartCounter) {
     if (_busy) {
         log_w("Check already in progress, ignoring re-entrant call");
@@ -180,11 +186,28 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
         return;
     }
 
-    log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)(doc["size"] | 0UL));
+    // Validate the advertised size before storing it: reading as int32_t
+    // rejects negative or overflowing values coming from malformed JSON.
+    const int32_t sizeValue = doc["size"] | 0;
+    if (sizeValue <= 0) {
+        log_e("Invalid firmware size advertised by the server: %d", (int)sizeValue);
+        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
+        return;
+    }
+
+    const uint32_t otaPartitionSize = getOtaPartitionSize();
+    if (otaPartitionSize > 0 && (uint32_t)sizeValue > otaPartitionSize) {
+        log_e("Firmware size %lu exceeds the OTA partition size %lu",
+              (unsigned long)sizeValue, (unsigned long)otaPartitionSize);
+        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
+        return;
+    }
+
+    log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)sizeValue);
 
     // Store metadata for the update download and verification.
     _checkData.version = newVersion;
-    _checkData.size = doc["size"] | 0;
+    _checkData.size = (uint32_t)sizeValue;
     _checkData.setSignature(doc["signature"] | "");
     _checkData.setIntegrity(doc["integrity"] | "");
     log_i("Signature: %s", _checkData.getSignature());
@@ -247,8 +270,11 @@ bool OtamaticClient::applyUpdateInternal() {
         return false;
     }
 
-    if (_checkData.size == 0) {
-        log_e("%s (size: 0)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidFirmware)));
+    const uint32_t otaPartitionSize = getOtaPartitionSize();
+    if (_checkData.size == 0 || (otaPartitionSize > 0 && _checkData.size > otaPartitionSize)) {
+        log_e("%s (size: %lu, OTA partition: %lu)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidFirmware)),
+              (unsigned long)_checkData.size, (unsigned long)otaPartitionSize);
         http.end();
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return false;
