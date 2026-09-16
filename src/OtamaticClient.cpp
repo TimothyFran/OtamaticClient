@@ -16,6 +16,10 @@ bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
     _firmwareVersion = currentFwVersion;
 
     strlcpy(_serviceKey, serviceKey != nullptr ? serviceKey : "", sizeof(_serviceKey));
+    size_t serviceKeyLen = strnlen(_serviceKey, sizeof(_serviceKey));
+    if (serviceKeyLen != 48) {
+        log_w("Service key length is %u, expected 48 characters, requests will likely be rejected", (unsigned)serviceKeyLen);
+    }
 
     _client->setTimeout(1000);
 
