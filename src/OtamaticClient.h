@@ -116,6 +116,32 @@ public:
     void setAutoRestart(bool enable) { _autoRestart = enable; }
 
     /**
+     * Override the server host and port the client connects to.
+     * @param host The hostname or IP address (copied internally).
+     * @param port The port number (default 80).
+     * @return true if the host was set, false if it was null or empty.
+     */
+    bool setServer(const char* host, uint16_t port = 80) {
+        if (host == nullptr || host[0] == '\0') return false;
+        strlcpy(_serverHostBuf, host, sizeof(_serverHostBuf));
+        _serverHost = _serverHostBuf;
+        _serverPort = port;
+        return true;
+    }
+
+    /**
+     * Get the server host currently in use.
+     * @return The server host.
+     */
+    const char* getServerHost() const { return _serverHost; }
+
+    /**
+     * Get the server port currently in use.
+     * @return The server port.
+     */
+    uint16_t getServerPort() const { return _serverPort; }
+
+    /**
      * Set the ECDSA public key used to verify the firmware signature
      * (ECDSA over NIST P-256 with SHA-256 on the downloaded firmware).
      * @param key The public key in PEM or Base64-encoded DER (SPKI) format.
@@ -124,7 +150,9 @@ public:
 
 private:
 
+    static constexpr size_t kServerHostMaxLen = 64;
     const char* _serverHost = "otamatic.eu";
+    char _serverHostBuf[kServerHostMaxLen] = {0};
     uint16_t _serverPort = 80;
 
     uint32_t _checkInterval = 5 * 60 * 1000;
