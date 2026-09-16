@@ -177,8 +177,22 @@ private:
 
     OtamaticVersionCheckData _checkData;
 
+    /** Flag to prevent re-entrant/concurrent check or update operations. */
+    bool _busy = false;
+
     /** Maximum time in milliseconds to wait for incoming data before considering the download stalled. */
     static constexpr uint32_t kUpdateStallTimeout = 10000;
+
+    /**
+     * Internal version check implementation, must only be called with _busy held.
+     */
+    void requestCheckNowInternal(bool restartCounter);
+
+    /**
+     * Internal update implementation, must only be called with _busy held.
+     * @return true if the update was applied, false otherwise.
+     */
+    bool applyUpdateInternal();
 
     /**
      * Build the "Bearer <serviceKey>" Authorization header value into

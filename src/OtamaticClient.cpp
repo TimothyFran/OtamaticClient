@@ -108,6 +108,16 @@ uint64_t OtamaticClient::getDeviceId() {
 }
 
 void OtamaticClient::requestCheckNow(bool restartCounter) {
+    if (_busy) {
+        log_w("Check already in progress, ignoring re-entrant call");
+        return;
+    }
+    _busy = true;
+    requestCheckNowInternal(restartCounter);
+    _busy = false;
+}
+
+void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     if (restartCounter) _lastCheck = millis();
 
     // Discard metadata from the previous update check.
@@ -184,10 +194,21 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
 
     if (!_autoUpdate) return;
 
-    applyUpdate();
+    applyUpdateInternal();
 }
 
 bool OtamaticClient::applyUpdate() {
+    if (_busy) {
+        log_w("Check or update already in progress, ignoring re-entrant call");
+        return false;
+    }
+    _busy = true;
+    bool result = applyUpdateInternal();
+    _busy = false;
+    return result;
+}
+
+bool OtamaticClient::applyUpdateInternal() {
     if (! _checkData.isValid()) {
         log_e("%s", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidCheckData)));
         transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidCheckData);
