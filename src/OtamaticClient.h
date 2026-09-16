@@ -51,8 +51,6 @@ public:
     void onEvent(void (*callback)(OtamaticClientEventData));
 
     /**
-     * Get the current firmware version, as provided by the
-     * OTAMATIC_FIRMWARE_VERSION define.
      * @return The current firmware version.
      */
     uint32_t firmwareVersion() const { return _firmwareVersion; }
