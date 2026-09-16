@@ -1,6 +1,6 @@
 {
     "name": "OtamaticClient",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Client OTA (Over-The-Air) per ESP32 con framework Arduino.",
     "keywords": "ota, update, firmware, esp32, wireless",
     "license": "BUSL-1.1",
