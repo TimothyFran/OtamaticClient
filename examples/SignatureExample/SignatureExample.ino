@@ -25,7 +25,7 @@ const char* PUBLIC_KEY_PEM = R"(
 
 WiFiClient httpClient;
 
-OtamaticClient ota(httpClient);
+OtamaticClient ota;
 
 void onOtaEvent(OtamaticClientEventData eventData) {
     Serial.print(F("[OtamaticClient] Received event: "));
@@ -54,6 +54,10 @@ void setup() {
     Serial.println();
     Serial.print("Wi-Fi connected, IP address: ");
     Serial.println(WiFi.localIP());
+
+    // Attach the transport: can also be called again at runtime (e.g. on a
+    // network interface change) without losing any configuration.
+    ota.setClient(&httpClient);
 
     if (!ota.begin(OTAMATIC_FIRMWARE_VERSION, kOtamaticServiceKey)) {
         Serial.println("[OtamaticClient] Initialization Failed");

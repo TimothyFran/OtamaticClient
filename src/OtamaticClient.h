@@ -7,17 +7,36 @@
 #include "OtamaticVersionCheckData.h"
 
 // Version of the OtamaticClient library itself.
-#define OTAMATIC_CLIENT_VERSION "0.1.0"
+#define OTAMATIC_CLIENT_VERSION "0.2.0"
 
 class OtamaticClient {
 public:
     /**
-     * Create a client bound to an externally managed Client instance
-     * (e.g. WiFiClient, WiFiClientSecure, EthernetClient...).
-     * The referenced object must outlive the OtamaticClient instance.
+     * Create an unbound client. A transport must be attached with
+     * setClient() before any network operation can be performed.
+     * Useful when the network client instance is created/destroyed at
+     * runtime (e.g. Ethernet -> Wi-Fi fallback): all the configuration
+     * (host, key, interval, event handler...) survives the rebind.
      */
-    OtamaticClient(Client& client);
-    ~OtamaticClient();
+    OtamaticClient() = default;
+    ~OtamaticClient() = default;
+
+    /**
+     * Bind the client to an externally managed Client instance. Can be
+     * called at any time, including while the device is running, to switch
+     * to a different transport (e.g. after a network interface change).
+     * All previously configured settings are preserved.
+     * @param client The new transport; must not be nullptr and must outlive
+     *               the OtamaticClient instance.
+     * @return true if the client was bound, false if client is nullptr
+     *         (the previous binding, if any, is kept).
+     */
+    bool setClient(Client* client);
+
+    /**
+     * @return The currently bound transport, or nullptr if none is bound.
+     */
+    Client* getClient() const { return _client; }
 
     /**
      * Initialize the library.

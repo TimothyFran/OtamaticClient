@@ -9,11 +9,23 @@
 #include <mbedtls/base64.h>
 #include <string.h>
 
-OtamaticClient::OtamaticClient(Client& client) : _client(&client) {}
-
-OtamaticClient::~OtamaticClient() {}
+bool OtamaticClient::setClient(Client* client) {
+    if (client == nullptr) {
+        log_w("setClient(nullptr) ignored, keeping the current binding");
+        return false;
+    }
+    _client = client;
+    _client->setTimeout(1000);
+    log_i("Client bound");
+    return true;
+}
 
 bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
+    if (_client == nullptr) {
+        log_e("No client bound, call setClient() before begin()");
+        return false;
+    }
+
     _firmwareVersion = currentFwVersion;
 
     strlcpy(_serviceKey, serviceKey != nullptr ? serviceKey : "", sizeof(_serviceKey));
@@ -114,6 +126,10 @@ uint32_t OtamaticClient::getOtaPartitionSize() const {
 }
 
 void OtamaticClient::requestCheckNow(bool restartCounter) {
+    if (_client == nullptr) {
+        log_e("No client bound, call setClient() first");
+        return;
+    }
     if (_busy) {
         log_w("Check already in progress, ignoring re-entrant call");
         return;
@@ -238,6 +254,10 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
 }
 
 bool OtamaticClient::applyUpdate() {
+    if (_client == nullptr) {
+        log_e("No client bound, call setClient() first");
+        return false;
+    }
     if (_busy) {
         log_w("Check or update already in progress, ignoring re-entrant call");
         return false;
