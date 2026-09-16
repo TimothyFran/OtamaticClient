@@ -12,11 +12,11 @@ enum class OtamaticClientEvent {
     UpdateStarted,      // Writing of the new firmware has started
     UpdateProgress,     // Firmware write progress
     UpdateCompleted,    // Update completed (reboot imminent)
-    UpdateFailed        // Update failed
+    OperationFailed     // Operation failed (check, update or configuration)
 };
 
 /**
- * Error codes transmitted as the payload of OtamaticClientEvent::UpdateFailed.
+ * Error codes transmitted as the payload of OtamaticClientEvent::OperationFailed.
  */
 enum class OtamaticClientError : uint8_t {
     None = 0,           // No error (used as default payload)
@@ -29,7 +29,8 @@ enum class OtamaticClientError : uint8_t {
     WriteFailed,        // Error while writing the firmware into the OTA partition
     EndFailed,          // Final image verification failed
     IntegrityFailed,    // The integrity hash of the downloaded firmware does not match
-    SignatureFailed     // The signature of the downloaded firmware does not match
+    SignatureFailed,    // The signature of the downloaded firmware does not match
+    ConfigInvalid       // Invalid configuration (e.g. service key length)
 };
 
 /**
@@ -37,7 +38,7 @@ enum class OtamaticClientError : uint8_t {
  *
  * The meaning of the payload depends on the event:
  * - UpdateProgress: the progress percentage (0-100).
- * - UpdateFailed:   the OtamaticClientError code describing the failure.
+ * - OperationFailed: the OtamaticClientError code describing the failure.
  * - Any other event: 0 (no payload).
  */
 struct OtamaticClientEventData {

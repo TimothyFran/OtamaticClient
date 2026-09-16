@@ -23,16 +23,19 @@ bool OtamaticClient::setClient(Client* client) {
 bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
     if (_client == nullptr) {
         log_e("No client bound, call setClient() before begin()");
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::ConfigInvalid);
+        return false;
+    }
+
+    size_t serviceKeyLen = serviceKey != nullptr ? strnlen(serviceKey, sizeof(_serviceKey)) : 0;
+    if (serviceKeyLen != 48) {
+        log_e("Invalid service key length: %u, expected 48 characters", (unsigned)serviceKeyLen);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::ConfigInvalid);
         return false;
     }
 
     _firmwareVersion = currentFwVersion;
-
-    strlcpy(_serviceKey, serviceKey != nullptr ? serviceKey : "", sizeof(_serviceKey));
-    size_t serviceKeyLen = strnlen(_serviceKey, sizeof(_serviceKey));
-    if (serviceKeyLen != 48) {
-        log_w("Service key length is %u, expected 48 characters, requests will likely be rejected", (unsigned)serviceKeyLen);
-    }
+    strlcpy(_serviceKey, serviceKey, sizeof(_serviceKey));
 
     _client->setTimeout(1000);
 
@@ -207,7 +210,7 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     const int32_t sizeValue = doc["size"] | 0;
     if (sizeValue <= 0) {
         log_e("Invalid firmware size advertised by the server: %d", (int)sizeValue);
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return;
     }
 
@@ -215,7 +218,7 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     if (otaPartitionSize > 0 && (uint32_t)sizeValue > otaPartitionSize) {
         log_e("Firmware size %lu exceeds the OTA partition size %lu",
               (unsigned long)sizeValue, (unsigned long)otaPartitionSize);
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return;
     }
 
@@ -235,13 +238,13 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     // in strict mode via setRequireSignature().
     if (_checkData.integrity[0] == '\0') {
         log_e("Server did not provide an integrity hash, rejecting update before download");
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
         _checkData.clear();
         return;
     }
     if (_requireSignature && _checkData.signature[0] == '\0') {
         log_e("Signature enforcement enabled but the server did not provide a signature, rejecting update before download");
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::SignatureFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::SignatureFailed);
         _checkData.clear();
         return;
     }
@@ -271,7 +274,7 @@ bool OtamaticClient::applyUpdate() {
 bool OtamaticClient::applyUpdateInternal() {
     if (! _checkData.isValid()) {
         log_e("%s", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidCheckData)));
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidCheckData);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidCheckData);
         return false;
     }
 
@@ -286,7 +289,7 @@ bool OtamaticClient::applyUpdateInternal() {
     NetworkClient& netClient = *static_cast<NetworkClient*>(_client);
     if(! http.begin(netClient, _serverHost, _serverPort, _fetchPath)) {
         log_e("%s (host: %s:%u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::ConnectionFailed)), _serverHost, _serverPort);
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::ConnectionFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::ConnectionFailed);
         return false;
     }
 
@@ -303,7 +306,7 @@ bool OtamaticClient::applyUpdateInternal() {
     if (httpCode != 200) {
         log_e("%s, HTTP code: %d", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::HttpFailed)), httpCode);
         http.end();
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::HttpFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::HttpFailed);
         return false;
     }
 
@@ -313,7 +316,7 @@ bool OtamaticClient::applyUpdateInternal() {
               reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidFirmware)),
               (unsigned long)_checkData.size, (unsigned long)otaPartitionSize);
         http.end();
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return false;
     }
 
@@ -321,7 +324,7 @@ bool OtamaticClient::applyUpdateInternal() {
     if (! Update.begin(_checkData.size, U_FLASH)) {
         log_e("%s (Update.begin error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::BeginFailed)), Update.getError());
         http.end();
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::BeginFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::BeginFailed);
         return false;
     }
 
@@ -340,7 +343,7 @@ bool OtamaticClient::applyUpdateInternal() {
         mbedtls_sha256_free(&shaCtx);
         Update.abort();
         log_e("Failed to initialize SHA-256 context");
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
         return false;
     }
 
@@ -418,21 +421,21 @@ bool OtamaticClient::applyUpdateInternal() {
     if (failed || written != _checkData.size) {
         Update.abort();
         log_e("%s (written: %lu/%lu)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(failedError)), (unsigned long)written, (unsigned long)_checkData.size);
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)failedError);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)failedError);
         return false;
     }
 
     // Verify the firmware integrity.
     if (! verifyIntegrity(integrityHash)) {
         Update.abort();
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
         return false;
     }
 
     // Verify the firmware signature when both signature and public key are available.
     if (checkSignature && ! verifySignature(integrityHash)) {
         Update.abort();
-        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::SignatureFailed);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::SignatureFailed);
         return false;
     }
 
@@ -443,7 +446,7 @@ bool OtamaticClient::applyUpdateInternal() {
     } else {
         log_i("Update completed, version: %lu", (unsigned long)_checkData.version);
     }
-    transmitEvent(success ? OtamaticClientEvent::UpdateCompleted : OtamaticClientEvent::UpdateFailed,
+    transmitEvent(success ? OtamaticClientEvent::UpdateCompleted : OtamaticClientEvent::OperationFailed,
                   success ? (uint8_t)OtamaticClientError::None : (uint8_t)OtamaticClientError::EndFailed);
 
     if (_autoRestart) ESP.restart();
@@ -548,7 +551,7 @@ const __FlashStringHelper* OtamaticClient::getEventName(OtamaticClientEvent even
         case OtamaticClientEvent::UpdateStarted: return F("Update started");
         case OtamaticClientEvent::UpdateProgress: return F("Update progress");
         case OtamaticClientEvent::UpdateCompleted: return F("Update completed");
-        case OtamaticClientEvent::UpdateFailed: return F("Update failed");
+        case OtamaticClientEvent::OperationFailed: return F("Operation failed");
         default: return F("Unknown event");
     }
 }
@@ -566,6 +569,7 @@ const __FlashStringHelper* OtamaticClient::getErrorName(OtamaticClientError erro
         case OtamaticClientError::EndFailed: return F("Verification failed");
         case OtamaticClientError::IntegrityFailed: return F("Integrity check failed");
         case OtamaticClientError::SignatureFailed: return F("Signature check failed");
+        case OtamaticClientError::ConfigInvalid: return F("Invalid configuration");
         default: return F("Unknown error");
     }
 }
