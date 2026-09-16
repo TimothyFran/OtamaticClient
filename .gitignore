@@ -17,3 +17,6 @@ build/
 .pio/
 .pioenvs/
 .piolibdeps/
+
+# Cline
+.clinerules
