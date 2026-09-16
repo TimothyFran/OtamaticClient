@@ -469,6 +469,13 @@ bool OtamaticClient::verifySignature(const uint8_t* integrityHash) {
         if (mbedtls_base64_decode(der, sizeof(der), &derLen,
                                   (const uint8_t*)_publicKey, strlen(_publicKey)) != 0) {
             derLen = strlen(_publicKey);
+            if (derLen > sizeof(der)) {
+                log_e("%s (raw DER key too long: %u bytes, max: %u)",
+                      reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::SignatureFailed)),
+                      (unsigned)derLen, (unsigned)sizeof(der));
+                mbedtls_pk_free(&pkCtx);
+                return false;
+            }
             memcpy(der, _publicKey, derLen);
         }
         pkRes = mbedtls_pk_parse_public_key(&pkCtx, der, derLen);
