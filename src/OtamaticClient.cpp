@@ -27,6 +27,14 @@ bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
     return true;
 }
 
+void OtamaticClient::buildBearerToken(char* buffer, size_t bufferSize) const {
+    int written = snprintf(buffer, bufferSize, "%s%s", kBearerPrefix, _serviceKey);
+    if (written < 0 || (size_t)written >= bufferSize) {
+        log_w("Bearer token truncated (key length: %u, buffer: %u), requests will likely be rejected",
+              (unsigned)strnlen(_serviceKey, sizeof(_serviceKey)), (unsigned)bufferSize);
+    }
+}
+
 void OtamaticClient::loop() {
     if (millis() - _lastCheck >= _checkInterval) requestCheckNow();
 }
@@ -119,8 +127,8 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
         return;
     }
 
-    char bearer[64] = {0};
-    snprintf(bearer, sizeof(bearer), "Bearer %s", _serviceKey);
+    char bearer[kBearerTokenMaxLen] = {0};
+    buildBearerToken(bearer, sizeof(bearer));
 
     // Collect the Transfer-Encoding header so we can detect chunked responses
     // (HTTP 1.1) before parsing the body. By default, HTTPClient discards headers.
@@ -201,8 +209,8 @@ bool OtamaticClient::applyUpdate() {
         return false;
     }
 
-    char bearer[64] = {0};
-    snprintf(bearer, sizeof(bearer), "Bearer %s", _serviceKey);
+    char bearer[kBearerTokenMaxLen] = {0};
+    buildBearerToken(bearer, sizeof(bearer));
 
     // Collect the Transfer-Encoding header to detect chunked responses (HTTP 1.1)
     const char* transferEncKeys[] = {"Transfer-Encoding"};

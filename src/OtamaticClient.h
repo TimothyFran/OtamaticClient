@@ -150,6 +150,13 @@ public:
 
 private:
 
+    /** Maximum length of the service key (48 chars + null terminator). */
+    static constexpr size_t kServiceKeyMaxLen = 49;
+    /** "Bearer " prefix used in the Authorization header. */
+    static constexpr const char* kBearerPrefix = "Bearer ";
+    /** Size of the buffer holding "Bearer " + service key. */
+    static constexpr size_t kBearerTokenMaxLen = kServiceKeyMaxLen + 7;
+
     static constexpr size_t kServerHostMaxLen = 64;
     const char* _serverHost = "otamatic.eu";
     char _serverHostBuf[kServerHostMaxLen] = {0};
@@ -158,7 +165,7 @@ private:
     uint32_t _checkInterval = 5 * 60 * 1000;
     uint32_t _lastCheck = 0;
     uint32_t _firmwareVersion = 0;
-    char _serviceKey[49] = {0};
+    char _serviceKey[kServiceKeyMaxLen] = {0};
     char _publicKey[512] = {0};
     bool _autoUpdate = true;
     bool _autoRestart = true;
@@ -172,6 +179,14 @@ private:
 
     /** Maximum time in milliseconds to wait for incoming data before considering the download stalled. */
     static constexpr uint32_t kUpdateStallTimeout = 10000;
+
+    /**
+     * Build the "Bearer <serviceKey>" Authorization header value into
+     * the provided buffer, logging a warning if the key is truncated.
+     * @param buffer The destination buffer.
+     * @param bufferSize The size of the destination buffer.
+     */
+    void buildBearerToken(char* buffer, size_t bufferSize) const;
 
     /**
      * Verify the SHA-256 integrity hash of the downloaded firmware against
