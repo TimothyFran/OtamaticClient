@@ -5,9 +5,10 @@
  * (ECDSA over NIST P-256 with SHA-256) and fully manual control over the
  * update lifecycle:
  *
- * - `autoUpdate` is disabled: the firmware download must be started
- *   explicitly by calling `applyUpdate()` when the `UpdateAvailable` event
- *   is received.
+ * - `autoUpdate` is disabled: the `UpdateAvailable` event only records the
+ *   request in a flag, and the download is started from `loop()` by calling
+ *   `applyUpdate()`. Never call blocking library APIs from inside the event
+ *   callback: it runs while the library is still performing the operation.
  * - `autoRestart` is disabled: the reboot must be performed manually when
  *   the `UpdateCompleted` event is received.
  *
@@ -38,6 +39,11 @@ WiFiClient httpClient;
 
 OtamaticClient ota(httpClient);
 
+// Set by the UpdateAvailable event callback, consumed in loop(). Never call
+// blocking library APIs (e.g. applyUpdate()) from inside the event callback:
+// it fires while the library is still performing the check operation.
+volatile bool applyUpdateRequested = false;
+
 void onOtaEvent(OtamaticClientEventData eventData) {
     Serial.print(F("[OtamaticClient] Received event: "));
     Serial.print(OtamaticClient::getEventName(eventData.event));
@@ -53,30 +59,20 @@ void onOtaEvent(OtamaticClientEventData eventData) {
     Serial.println();
 
     switch (eventData.event) {
-        case OtamaticClientEvent::UpdateAvailable: {
-            // autoUpdate is disabled: decide here whether to apply the
-            // update. The check data carries version, size, signature and
-            // integrity hash provided by the server.
-            const OtamaticVersionCheckData& checkData = ota.getCheckData();
-            Serial.printf(F("[OtamaticClient] New firmware version %lu available (%lu bytes)\n"),
-                          (unsigned long)checkData.version, (unsigned long)checkData.size);
-            Serial.printf(F("[OtamaticClient] Integrity hash: %s\n"), checkData.getIntegrity());
-
-            // Apply the update manually. Insert any custom pre-update logic
-            // here (e.g. ask the user, wait for idle state, notify the
-            // server...).
-            Serial.println(F("[OtamaticClient] Applying update manually..."));
-            if (!ota.applyUpdate()) {
-                Serial.println(F("[OtamaticClient] Update could not be applied (see UpdateFailed event)"));
-            }
+        case OtamaticClientEvent::UpdateAvailable:
+            // NEVER call applyUpdate() here. Just record the
+            // request and act on it from outside the callback.
+            applyUpdateRequested = true;
             break;
-        }
 
         case OtamaticClientEvent::UpdateCompleted:
-            // autoRestart is disabled: restart the device manually.
-            // Any pre-reboot logic (e.g. flush logs, notify a status
-            // endpoint) can go here.
+            // autoRestart is disabled: restart the device manually
+
             Serial.println(F("[OtamaticClient] Update completed, restarting..."));
+            
+            // Insert any custom pre-restart logic here (e.g. ask the user,
+            // wait for idle state, notify the server...).
+
             delay(1000);
             ESP.restart();
             break;
@@ -111,8 +107,8 @@ void setup() {
     ota.onEvent(onOtaEvent);
     ota.setPublicKey(PUBLIC_KEY_PEM);
 
-    // Disable the automatic behaviors: update and restart are handled
-    // manually in the event callback.
+    // Disable the automatic behaviors: the update is applied manually from
+    // loop(), the restart from the UpdateCompleted event.
     ota.setAutoUpdate(false);
     ota.setAutoRestart(false);
 
@@ -125,5 +121,22 @@ void setup() {
 
 void loop() {
     ota.loop();
+
+    if (applyUpdateRequested && ota.hasUpdateAvailable()) {
+        applyUpdateRequested = false;
+
+        const OtamaticVersionCheckData& checkData = ota.getCheckData();
+        Serial.printf(F("[OtamaticClient] New firmware version %lu available (%lu bytes)\n"),
+                      (unsigned long)checkData.version, (unsigned long)checkData.size);
+        Serial.printf(F("[OtamaticClient] Integrity hash: %s\n"), checkData.getIntegrity());
+
+        // Insert any custom pre-update logic here (e.g. ask the user,
+        // wait for idle state, notify the server...).
+
+        Serial.println(F("[OtamaticClient] Applying update manually..."));
+        if (!ota.applyUpdate()) {
+            Serial.println(F("[OtamaticClient] Update could not be applied (see UpdateFailed event)"));
+        }
+    }
 }
 
