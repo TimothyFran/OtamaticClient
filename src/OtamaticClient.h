@@ -142,6 +142,14 @@ public:
     uint16_t getServerPort() const { return _serverPort; }
 
     /**
+     * Set the flag to enforce signature verification: when enabled, an update
+     * whose version check does not include a signature is rejected before
+     * downloading the firmware.
+     * @param enable true to reject unsigned updates
+     */
+    void setRequireSignature(bool enable) { _requireSignature = enable; }
+
+    /**
      * Set the ECDSA public key used to verify the firmware signature
      * (ECDSA over NIST P-256 with SHA-256 on the downloaded firmware).
      * @param key The public key in PEM or Base64-encoded DER (SPKI) format.
@@ -169,6 +177,8 @@ private:
     char _publicKey[512] = {0};
     bool _autoUpdate = true;
     bool _autoRestart = true;
+    /** When true, updates without a server-provided signature are rejected before download. */
+    bool _requireSignature = false;
 
     uint64_t _deviceId = 0;
 

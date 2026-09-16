@@ -213,6 +213,23 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     log_i("Signature: %s", _checkData.getSignature());
     log_i("Integrity: %s", _checkData.getIntegrity());
 
+    // Reject malformed check data before downloading: the integrity hash is
+    // always mandatory (the download would be verified against it only after
+    // wasting the whole transfer), while the signature can be made mandatory
+    // in strict mode via setRequireSignature().
+    if (_checkData.integrity[0] == '\0') {
+        log_e("Server did not provide an integrity hash, rejecting update before download");
+        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
+        _checkData.clear();
+        return;
+    }
+    if (_requireSignature && _checkData.signature[0] == '\0') {
+        log_e("Signature enforcement enabled but the server did not provide a signature, rejecting update before download");
+        transmitEvent(OtamaticClientEvent::UpdateFailed, (uint8_t)OtamaticClientError::SignatureFailed);
+        _checkData.clear();
+        return;
+    }
+
     transmitEvent(OtamaticClientEvent::UpdateAvailable);
 
     if (!_autoUpdate) return;
