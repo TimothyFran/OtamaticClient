@@ -39,7 +39,7 @@ WiFiClient httpClient;
 
 OtamaticClient ota;
 
-// Set by the UpdateAvailable event callback, consumed in loop(). Never call
+// Set by the OperationFailed event callback, consumed in loop(). Never call
 // blocking library APIs (e.g. applyUpdate()) from inside the event callback:
 // it fires while the library is still performing the check operation.
 volatile bool applyUpdateRequested = false;
@@ -51,7 +51,7 @@ void onOtaEvent(OtamaticClientEventData eventData) {
     if (eventData.event == OtamaticClientEvent::UpdateProgress) {
         // data carries the progress percentage (0-100)
         Serial.printf(F(" (%u%%)"), eventData.data);
-    } else if (eventData.event == OtamaticClientEvent::UpdateFailed) {
+    } else if (eventData.event == OtamaticClientEvent::OperationFailed) {
         // data carries an OtamaticClientError code
         Serial.printf(F(" (%s)"), OtamaticClient::getErrorName((OtamaticClientError)eventData.data));
     }
@@ -77,8 +77,8 @@ void onOtaEvent(OtamaticClientEventData eventData) {
             ESP.restart();
             break;
 
-        case OtamaticClientEvent::UpdateFailed:
-            Serial.println(F("[OtamaticClient] Update failed, the next check will retry automatically"));
+        case OtamaticClientEvent::OperationFailed:
+            Serial.println(F("[OtamaticClient] Operation failed, the next check will retry automatically"));
             break;
 
         default:
@@ -103,13 +103,16 @@ void setup() {
     // network interface change) without losing any configuration.
     ota.setClient(&httpClient);
 
+    // Register the event handler BEFORE begin(): events emitted by begin()
+    // (e.g. ConfigInvalid) are delivered to it.
+    ota.onEvent(onOtaEvent);
+    ota.setPublicKey(PUBLIC_KEY_PEM);
+
     if (!ota.begin(OTAMATIC_FIRMWARE_VERSION, kOtamaticServiceKey)) {
         Serial.println("[OtamaticClient] Initialization Failed");
     }
 
     ota.setCheckInterval(15000);
-    ota.onEvent(onOtaEvent);
-    ota.setPublicKey(PUBLIC_KEY_PEM);
 
     // Disable the automatic behaviors: the update is applied manually from
     // loop(), the restart from the UpdateCompleted event.

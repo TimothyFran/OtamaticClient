@@ -34,7 +34,7 @@ void onOtaEvent(OtamaticClientEventData eventData) {
     if (eventData.event == OtamaticClientEvent::UpdateProgress) {
         // data carries the progress percentage (0-100)
         Serial.printf(F(" (%u%%)"), eventData.data);
-    } else if (eventData.event == OtamaticClientEvent::UpdateFailed) {
+    } else if (eventData.event == OtamaticClientEvent::OperationFailed) {
         // data carries an OtamaticClientError code
         Serial.printf(F(" (%s)"), OtamaticClient::getErrorName((OtamaticClientError)eventData.data));
     }
@@ -59,13 +59,16 @@ void setup() {
     // network interface change) without losing any configuration.
     ota.setClient(&httpClient);
 
+    // Register the event handler BEFORE begin(): events emitted by begin()
+    // (e.g. ConfigInvalid) are delivered to it.
+    ota.onEvent(onOtaEvent);
+    ota.setPublicKey(PUBLIC_KEY_PEM);
+
     if (!ota.begin(OTAMATIC_FIRMWARE_VERSION, kOtamaticServiceKey)) {
         Serial.println("[OtamaticClient] Initialization Failed");
     }
 
     ota.setCheckInterval(15000);
-    ota.onEvent(onOtaEvent);
-    ota.setPublicKey(PUBLIC_KEY_PEM);
 
     Serial.printf(F("[OtamaticClient] Firmware version: %d\n"), ota.firmwareVersion());
     Serial.printf(F("[OtamaticClient] Device ID: %llu\n"), ota.getDeviceId());
