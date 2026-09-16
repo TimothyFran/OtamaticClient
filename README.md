@@ -16,11 +16,42 @@ OtamaticClient/
 └── extras/                   # Additional documentation, diagrams, etc.
 ```
 
+## Installation
+
+OtamaticClient is available both in the **Arduino Library Manager** and in the
+**PlatformIO Library Registry**.
+
+### Arduino IDE
+
+Open **Sketch → Include Library → Manage Libraries...**, search for
+**OtamaticClient** by *Timothy Franceschi (TimothyFran)* and click
+**Install** (with the latest version selected).
+
+### PlatformIO
+
+Add it to the `lib_deps` section of your `platformio.ini`:
+
+```ini
+[env:esp32dev]
+platform = espressif32
+framework = arduino
+lib_deps = timothyfran/OtamaticClient @ ^0.2.0
+```
+
+or install it from the PlatformIO Home → **Libraries** panel by searching for
+**OtamaticClient**.
+
 ## Usage
 
 OtamaticClient is transport agnostic: it implements plain HTTP/1.1 on top of
 any Arduino `Client` implementation, so it works over Wi-Fi, Ethernet and GSM,
 in both HTTP and HTTPS (depending on the client class you pass in).
+
+The client is constructed unbound and the transport is attached afterwards
+with `setClient()`: this makes it possible to switch transport at runtime
+(e.g. after an Ethernet -> Wi-Fi fallback where the network client is
+destroyed and recreated) without losing any configuration (host, service key,
+check interval, event handler, ...).
 
 ```cpp
 #include <Arduino.h>
@@ -34,7 +65,7 @@ WiFiClient httpClient;               // HTTP over Wi-Fi
 // EthernetClient httpClient;        // HTTP over Ethernet (Arduino Ethernet)
 // TinyGsmClient httpClient(modem);  // HTTP over GSM/LTE (TinyGSM)
 
-OtamaticClient ota(httpClient);      // the referenced client must outlive `ota`
+OtamaticClient ota;                  // transport attached in setup() via setClient()
 
 void onOtaEvent(OtamaticClientEventData eventData) {
     // Handle the update lifecycle events (see "Events" below)
@@ -42,9 +73,12 @@ void onOtaEvent(OtamaticClientEventData eventData) {
 
 void setup() {
     // ... connect your network first ...
+    ota.setClient(&httpClient);
+    // Register the event handler BEFORE begin(): events emitted by begin()
+    // (e.g. ConfigInvalid) are delivered to it.
+    ota.onEvent(onOtaEvent);
     ota.begin(FIRMWARE_VERSION, "your-otamatic-service-key");
     ota.setCheckInterval(5 * 60 * 1000);  // check every 5 minutes
-    ota.onEvent(onOtaEvent);
 }
 
 void loop() {
@@ -56,12 +90,19 @@ A complete example is available in [examples/AdvancedExample](examples/AdvancedE
 
 ### Configuration
 
+- `setClient(client)`: bind the transport to use. Must be called before
+  `begin()`; it can also be called again at any time to rebind to a different
+  `Client` instance (e.g. on a network interface change).
+- `getClient()`: returns the currently bound `Client` (or `nullptr` if none).
+- `begin(firmwareVersion, serviceKey)`: initialize the library. Returns
+  `false` — and emits an `OperationFailed` event with the `ConfigInvalid`
+  error code — if no client is bound or the service key is invalid.
 - `setCheckInterval(interval)`: milliseconds between two automatic checks
   (default: 5 minutes).
 - `requestCheckNow(restartCounter)`: force an immediate check; pass `false` to
-  keep the interval counter running.
+  keep the interval counter untouched.
 - `setDeviceId(id)` / `getDeviceId()`: by default the device ID is derived from
-  the ESP32 station MAC address; a custom ID can be set before the first check.
+  the ESP32 station MAC address; a custom ID can be set if needed for your custom logic.
 - `setAutoUpdate(enable)`: when disabled (default: enabled), an available
   update is only reported through the `UpdateAvailable` event and must be
   applied manually with `applyUpdate()`.
@@ -88,9 +129,9 @@ A complete example is available in [examples/AdvancedExample](examples/AdvancedE
 | `UpdateStarted` | – | Writing of the new firmware started |
 | `UpdateProgress` | Progress % (0-100) | Firmware write progress |
 | `UpdateCompleted` | – | Update completed (device ready to reboot) |
-| `UpdateFailed` | `OtamaticClientError` code | Update failed, see below |
+| `OperationFailed` | `OtamaticClientError` code | Operation failed, see below |
 
-Error codes reported with `UpdateFailed`:
+Error codes reported with `OperationFailed`:
 
 | Code | Meaning |
 | ---- | ------- |
@@ -105,6 +146,7 @@ Error codes reported with `UpdateFailed`:
 | `EndFailed` | Final image verification failed |
 | `IntegrityFailed` | The integrity hash of the downloaded firmware does not match |
 | `SignatureFailed` | The signature of the downloaded firmware does not match |
+| `ConfigInvalid` | Invalid configuration (e.g. `begin()` called with an invalid service key, or before `setClient()`) |
 
 ### Firmware verification
 
@@ -134,6 +176,16 @@ the signature check is skipped and a warning is logged.
 
 The library never allocates a client for you: you own the `Client` instance
 and it must stay alive for the whole sketch lifetime.
+
+When the network interface changes (e.g. Ethernet -> Wi-Fi fallback where the
+client object is destroyed and recreated), rebind it at runtime: all the
+previously configured settings are preserved.
+
+```cpp
+if (ota.getClient() != &newHttpClient) {
+    ota.setClient(&newHttpClient);
+}
+```
 
 ## License
 
