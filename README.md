@@ -10,7 +10,7 @@ OtamaticClient/
 ├── library.json              # Metadata for PlatformIO
 ├── LICENSE                   # Business Source License 1.1
 ├── README.md
-├── keywords.txt              # Syntax highlighting for the Arduino IDE
+├── keywords.txt              # Syntax highlighting for the IDE
 ├── src/                      # Library source code
 ├── examples/                 # Example sketches
 └── extras/                   # Additional documentation, diagrams, etc.
@@ -44,14 +44,8 @@ or install it from the PlatformIO Home → **Libraries** panel by searching for
 ## Usage
 
 OtamaticClient is transport agnostic: it implements plain HTTP/1.1 on top of
-any Arduino `Client` implementation, so it works over Wi-Fi, Ethernet and GSM,
-in both HTTP and HTTPS (depending on the client class you pass in).
-
-The client is constructed unbound and the transport is attached afterwards
-with `setClient()`: this makes it possible to switch transport at runtime
-(e.g. after an Ethernet -> Wi-Fi fallback where the network client is
-destroyed and recreated) without losing any configuration (host, service key,
-check interval, event handler, ...).
+any `Client` implementation, so it works over Wi-Fi, Ethernet, GSM, in both HTTP and HTTPS (depending on the client class you pass in).
+The transport is attached with `setClient()` and can be re-bound at runtime (e.g. after a network change) without losing any configuration.
 
 ```cpp
 #include <Arduino.h>
@@ -65,7 +59,7 @@ WiFiClient httpClient;               // HTTP over Wi-Fi
 // EthernetClient httpClient;        // HTTP over Ethernet (Arduino Ethernet)
 // TinyGsmClient httpClient(modem);  // HTTP over GSM/LTE (TinyGSM)
 
-OtamaticClient ota;                  // transport attached in setup() via setClient()
+OtamaticClient ota;
 
 void onOtaEvent(OtamaticClientEventData eventData) {
     // Handle the update lifecycle events (see "Events" below)
@@ -74,15 +68,13 @@ void onOtaEvent(OtamaticClientEventData eventData) {
 void setup() {
     // ... connect your network first ...
     ota.setClient(&httpClient);
-    // Register the event handler BEFORE begin(): events emitted by begin()
-    // (e.g. ConfigInvalid) are delivered to it.
     ota.onEvent(onOtaEvent);
     ota.begin(FIRMWARE_VERSION, "your-otamatic-service-key");
     ota.setCheckInterval(5 * 60 * 1000);  // check every 5 minutes
 }
 
 void loop() {
-    ota.loop();  // performs a version check on every check interval
+    ota.loop();
 }
 ```
 
@@ -90,72 +82,42 @@ A complete example is available in [examples/AdvancedExample](examples/AdvancedE
 
 ### Configuration
 
-- `setClient(client)`: bind the transport to use. Must be called before
-  `begin()`; it can also be called again at any time to rebind to a different
-  `Client` instance (e.g. on a network interface change).
-- `getClient()`: returns the currently bound `Client` (or `nullptr` if none).
-- `begin(firmwareVersion, serviceKey)`: initialize the library. Returns
-  `false` — and emits an `OperationFailed` event with the `ConfigInvalid`
-  error code — if no client is bound or the service key is invalid.
-- `setCheckInterval(interval)`: milliseconds between two automatic checks
-  (default: 5 minutes).
-- `requestCheckNow(restartCounter)`: force an immediate check; pass `false` to
-  keep the interval counter untouched.
-- `setDeviceId(id)` / `getDeviceId()`: by default the device ID is derived from
-  the ESP32 station MAC address; a custom ID can be set if needed for your custom logic.
-- `setAutoUpdate(enable)`: when disabled (default: enabled), an available
-  update is only reported through the `UpdateAvailable` event and must be
-  applied manually with `applyUpdate()`.
-- `setAutoRestart(enable)`: when disabled (default: enabled), the device is not
-  rebooted automatically after a successful update; restart it with
-  `ESP.restart()` when the `UpdateCompleted` event is received.
-- `setPublicKey(key)`: ECDSA public key (PEM or Base64-encoded DER, SPKI) used
-  to verify the firmware signature. See "Firmware verification".
+- `setClient(client)` / `getClient()`: bind (or read) the transport. Must be
+  called before `begin()`.
+- `begin(firmwareVersion, serviceKey)`: initialize the library; returns `false`
+  (with a `ConfigInvalid` error) if the transport is missing or the key is invalid.
+- `setCheckInterval(interval)`: milliseconds between automatic checks (default: 5 min).
+- `requestCheckNow(restartCounter)`: force an immediate check.
+- `setDeviceId(id)` / `getDeviceId()`: device ID (default: ESP32 station MAC).
+- `setAutoUpdate(enable)`: disable to only report updates via the
+  `UpdateAvailable` event and apply them manually with `applyUpdate()`.
+- `setAutoRestart(enable)`: disable to reboot manually with `ESP.restart()`
+  when `UpdateCompleted` is received.
+- `setPublicKey(key)`: ECDSA public key for signature verification
+  (see "Firmware verification").
 - `firmwareVersion()` / `getCheckData()` / `hasUpdateAvailable()`: inspect the
-  running version and the result of the last version check. The check data is
-  populated when an update is found and cleared at the beginning of every new
-  check; it is not persisted across reboots.
+  running version and the result of the last check (not persisted across reboots).
 
 ### Local update portal
 
-The library also provides an alternative update transport: a minimal web page
-(stored in the firmware image, **no filesystem needed**) served by an
-`AsyncWebServer` on port 80 that allows the upload of a firmware `.bin`
-directly from a browser.
+An alternative update transport: a minimal web page (no filesystem needed)
+that lets you upload a firmware `.bin` directly from a browser.
 
 ```cpp
-// Non blocking: starts the server and returns immediately.
-// timeout: inactivity timeout in ms after which the portal stops itself
-// (0 to disable it). Requires an active Wi-Fi connection.
-ota.startPortal(5 * 60 * 1000UL);
+ota.startPortal(5 * 60 * 1000UL);  // timeout in ms (0 to disable it)
 ```
 
-- Call `ota.loop()` as usual: it services the portal (timeout enforcement,
-  stalled upload recovery, post-upload restart).
-- The portal stops itself after a successful upload; `stopPortal()` stops it
-  at any time and aborts any upload in progress. `isPortalActive()` reports
-  the current state.
-- The upload is written into the OTA partition by the same pipeline used by
-  `applyUpdate()`: all the update events (`UpdateStarted`, `UpdateProgress`,
-  `UpdateCompleted`, `OperationFailed`) are emitted as usual.
-- Integrity and signature verification are skipped: the binary arrives
-  directly from the user, without a version check payload. The firmware size
-  is not part of the HTTP multipart request, so the page fills a hidden field
-  from the browser `File API`: when available, the size is used to validate
-  the image against the OTA partition before writing it and to report an exact
-  `UpdateProgress` percentage; otherwise the percentage is estimated from the
-  request size. Uploads without the field (`curl`, JavaScript disabled...) are
-  still applied.
+- Non-blocking: call `ota.loop()` as usual to service it.
+- The portal stops itself after a successful upload; `stopPortal()` stops it at
+  any time, `isPortalActive()` reports the state.
+- All the update events are emitted as usual, but integrity and signature
+  verification are skipped (the binary comes from the user, not the server).
 - Periodic version checks are suspended while the portal is active.
-- The event handler is invoked from the AsyncWebServer task: do not block
-  inside it.
-- The portal is transport agnostic like the rest of the library: it works on
-  any network interface handled by the SoC network stack (Wi-Fi station or
-  soft-AP, wired interfaces), regardless of the `Client` bound with
-  `setClient()`. Being an inbound server implemented with AsyncTCP, it cannot
-  work when the connection is provided by an external modem (e.g. TinyGSM).
-- `setAutoRestart(true)` (default) reboots the device ~2s after a successful
-  upload, once the HTTP response has been delivered to the browser.
+- Works on Wi-Fi (station/soft-AP) and wired interfaces; not with an external
+  modem (e.g. TinyGSM).
+- With `setAutoRestart(true)` (default) the device reboots shortly after a
+  successful upload.
+- The event handler may run while the upload is in progress: do not block inside it.
 
 ### Events
 
@@ -191,12 +153,7 @@ Error codes reported with `OperationFailed`:
 
 ### Firmware verification
 
-After the download, the client always verifies the SHA-256 integrity hash of
-the firmware against the value provided by the server. When the server also
-provides a signature and a public key has been configured with
-`setPublicKey()`, the firmware signature is verified as well (ECDSA over
-NIST P-256 with SHA-256). If a signature is provided but no public key is set,
-the signature check is skipped and a warning is logged.
+The client always verifies the SHA-256 integrity hash of the downloaded firmware. If the server also provides a signature and you configured a public key with `setPublicKey()`, the signature is verified as well (ECDSA P-256 + SHA-256). With `setRequireSignature(true)`, updates without a signature are rejected outright.
 
 ### Examples
 
@@ -215,18 +172,7 @@ the signature check is skipped and a warning is logged.
 | Ethernet | `EthernetClient` | Any `Client` with TLS support works for HTTPS |
 | GSM/LTE | `TinyGsmClient` (TinyGSM) | Power on the modem before calling `ota.begin()` |
 
-The library never allocates a client for you: you own the `Client` instance
-and it must stay alive for the whole sketch lifetime.
-
-When the network interface changes (e.g. Ethernet -> Wi-Fi fallback where the
-client object is destroyed and recreated), rebind it at runtime: all the
-previously configured settings are preserved.
-
-```cpp
-if (ota.getClient() != &newHttpClient) {
-    ota.setClient(&newHttpClient);
-}
-```
+You own the `Client` instance: it must stay alive for the whole sketch lifetime. If the network changes, just re-bind it with `setClient()`.
 
 ## License
 
@@ -252,8 +198,4 @@ This project is licensed under the **Business Source License 1.1** (SPDX: `BUSL-
 These restrictions only apply if you are competing directly with the Licensor's own managed OTA offering. If in doubt, contact us.
 
 For commercial licensing, contact the Licensor: **Timothy Franceschi <timothy@franceschi.es>**.
-
-
-
-
 
