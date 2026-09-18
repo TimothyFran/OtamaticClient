@@ -1,6 +1,6 @@
 {
     "name": "OtamaticClient",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Client OTA (Over-The-Air) per ESP32 con framework Arduino.",
     "keywords": "ota, update, firmware, esp32, wireless",
     "license": "BUSL-1.1",
@@ -28,6 +28,16 @@
             "owner": "bblanchon",
             "name": "StreamUtils",
             "version": "^1.9.0"
+        },
+        {
+            "owner": "esp32async",
+            "name": "ESPAsyncWebServer",
+            "version": "^3.12.0"
+        },
+        {
+            "owner": "esp32async",
+            "name": "AsyncTCP",
+            "version": "^3.5.0"
         }
     ]
 }

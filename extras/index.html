@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Otamatic update</title>
+  <style>
+    :root {
+      --bd: #dfe5ef;
+      --tx: #1c2430;
+      --dm: #5c6a7d;
+      --bl: #3273dc;
+      --tl: #00a58c;
+      --ok: #0ca678;
+      --fl: #d64545;
+      --gr: linear-gradient(90deg, #3273dc, #00d1b2);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px / 1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: var(--tx);
+      background: #f4f6fb;
+      display: flex;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    main { width: min(420px, 100%); padding: 28px 20px; }
+    header { margin-bottom: 26px; }
+    .lg { display: block; width: 150px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .sub { margin: 0 0 22px; color: var(--dm); font-size: 14px; }
+    .sub code {
+      font: 600 12.5px ui-monospace, Consolas, monospace;
+      color: var(--bl);
+      background: #e8eefb;
+      padding: 1px 5px;
+      border-radius: 5px;
+    }
+    .sel {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 28px 16px 20px;
+      background: #fff;
+      border: 1.5px dashed #b9c6dc;
+      border-radius: 12px;
+      cursor: pointer;
+      text-align: center;
+      font-size: 13.5px;
+      color: var(--dm);
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .sel:hover { border-color: var(--bl); background: #f6f9ff; }
+    .sel input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .ci { width: 60px; height: 45px; }
+    .ci rect { fill: #edf2fb; stroke: var(--bl); stroke-width: 1.4; }
+    .ci path { fill: none; stroke: #93b1e4; stroke-width: 1.5; stroke-linecap: round; }
+    .b2 {
+      font: 600 12.5px ui-monospace, Consolas, monospace;
+      color: var(--bl);
+      border: 1px solid var(--bl);
+      border-radius: 99px;
+      padding: 5px 14px;
+    }
+    .sel:hover .b2 { background: var(--bl); color: #fff; }
+    button {
+      width: 100%;
+      margin-top: 16px;
+      padding: 12px 16px;
+      font: 700 15px ui-monospace, Consolas, monospace;
+      letter-spacing: 0.04em;
+      color: #fff;
+      background: var(--gr);
+      border: 0;
+      border-radius: 9px;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button:not(:disabled):hover { filter: brightness(1.06); }
+    .nt { font-size: 12px; color: #7e8aa0; margin: 14px 0 0; }
+    .pb {
+      height: 12px;
+      border: 1px solid var(--bd);
+      border-radius: 99px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .pb i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: var(--gr);
+      border-radius: 99px;
+      transition: width 0.2s;
+    }
+    .pc {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin: 10px 0 0;
+      font-family: ui-monospace, Consolas, monospace;
+    }
+    .pc b { font-size: 38px; color: var(--bl); }
+    .pc span { font-size: 12.5px; color: var(--dm); }
+    .ok h1 { color: var(--ok); }
+    .er h1 { color: var(--fl); }
+    .sel.dr { border-color: var(--bl); background: #f6f9ff; }
+    @media (prefers-reduced-motion: reduce) { * { transition: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <svg class="lg" viewBox="0 0 71.44 12.7" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="lg-b" x1="3.92" y1="8.8" x2="8.28" y2="4.44" gradientUnits="userSpaceOnUse" href="#lg-a"></linearGradient>
+          <linearGradient id="lg-a">
+            <stop offset="0" stop-color="#3273dc"></stop>
+            <stop offset="1" stop-color="#00d1b2"></stop>
+          </linearGradient>
+          <linearGradient id="lg-c" x1="3.92" y1="8.81" x2="8.28" y2="4.44" gradientUnits="userSpaceOnUse" href="#lg-a"></linearGradient>
+          <linearGradient id="lg-d" x1="3.53" y1="6.82" x2="8.33" y2="6.82" gradientUnits="userSpaceOnUse" href="#lg-a"></linearGradient>
+        </defs>
+        <path d="M8.72 4.44H4.73v.1" fill="none" stroke="url(#lg-b)" stroke-width=".99"></path>
+        <path d="M8.22 3.94v3.99h.1" fill="none" stroke="url(#lg-c)" stroke-width=".99"></path>
+        <circle cx="6.34" cy="6.34" r="5.32" fill="none" stroke="#3273dc" stroke-width="1.03" stroke-linejoin="round"></circle>
+        <ellipse cx="2.61" cy="10.13" rx="1.3" ry="1.29" fill="#fff" stroke="#3273dc" stroke-width="1.07" stroke-linejoin="round"></ellipse>
+        <path d="m3.53 9.2 4.75-4.76.05.05" fill="none" stroke="url(#lg-d)" stroke-width="1.09" stroke-linejoin="bevel"></path>
+        <text xml:space="preserve" style="line-height:1.25" x="13.16" y="10.96" font-weight="700" font-size="12.7" font-family="Segoe UI" letter-spacing="0" fill="#3273dc">
+          <tspan x="13.16" y="10.96">OTA</tspan>
+        </text>
+        <text xml:space="preserve" style="line-height:1.25" x="37.43" y="10.96" font-weight="700" font-size="12.7" font-family="Segoe UI" letter-spacing="0" fill="#00d1b2">
+          <tspan x="37.43" y="10.96">matic</tspan>
+        </text>
+      </svg>
+    </header>
+    <section id="v1">
+      <h1>Firmware update</h1>
+      <p class="sub">Select a <code>.bin</code> firmware and write it to this device. It reboots when done.</p>
+      <form id="m" method="POST" action="/update" enctype="multipart/form-data">
+        <input type="hidden" name="filesize" id="s" value="">
+        <label class="sel">
+          <input type="file" id="f" name="update" accept=".bin" required>
+          <svg class="ci" viewBox="0 0 24 18">
+            <rect x="5.5" y="3.5" width="13" height="11" rx="1.5"></rect>
+            <path d="M2 6.5h3.5M2 11.5h3.5M18.5 6.5H22M18.5 11.5H22M9.5 3.5V1M14.5 3.5V1M9.5 14.5V17M14.5 14.5V17"></path>
+          </svg>
+          <span id="e">No file chosen</span>
+          <span class="b2">Browse files</span>
+        </label>
+        <button id="b" type="submit">Write to device</button>
+        <p class="nt">Local uploads skip signature checks: flash only firmware you trust.</p>
+      </form>
+    </section>
+    <section id="v2" hidden>
+      <h1>Writing firmware</h1>
+      <p class="sub" id="n"></p>
+      <div class="pb"><i id="c"></i></div>
+      <p class="pc"><b id="p">0%</b><span id="d">0 B / 0 B</span></p>
+      <p class="nt">Keep this page open and do not power off the device.</p>
+    </section>
+    <section id="v3" hidden aria-live="polite">
+      <h1 id="rt"></h1>
+      <p class="sub" id="rb"></p>
+      <button id="a" type="button">Flash another firmware</button>
+    </section>
+  </main>
+  <script>
+    (function () {
+      function $(id) {
+        return document.getElementById(id);
+      }
+      var fileInput = $("f");
+      var sizeInput = $("s");
+      var submitButton = $("b");
+      var fileLabel = $("e");
+      var dropZone = document.querySelector(".sel");
+      function formatSize(bytes) {
+        if (bytes > 1048576) {
+          return (bytes / 1048576).toFixed(2) + " MB";
+        }
+        if (bytes > 1024) {
+          return (bytes / 1024).toFixed(1) + " kB";
+        }
+        return bytes + " B";
+      }
+      function showView(n) {
+        [1, 2, 3].forEach(function (i) {
+          $("v" + i).hidden = (i !== n);
+        });
+      }
+      function syncFileState() {
+        var file = fileInput.files[0];
+        sizeInput.value = file ? file.size : "";
+        submitButton.disabled = !file;
+        fileLabel.textContent = file
+          ? file.name + " \u00b7 " + formatSize(file.size)
+          : "No file chosen";
+      }
+      fileInput.onchange = syncFileState;
+      $("a").addEventListener("click", function (ev) {
+        ev.preventDefault();
+        document.body.className = "";
+        $("m").reset();
+        showView(1);
+        syncFileState();
+      });
+      dropZone.ondragover = function (ev) {
+        ev.preventDefault();
+        dropZone.classList.add("dr");
+      };
+      dropZone.ondragleave = function () {
+        dropZone.classList.remove("dr");
+      };
+      dropZone.ondrop = function (ev) {
+        ev.preventDefault();
+        dropZone.classList.remove("dr");
+        var files = ev.dataTransfer && ev.dataTransfer.files;
+        if (files && files.length) {
+          fileInput.files = files;
+          syncFileState();
+        }
+      };
+      window.addEventListener("dragover", function (ev) {
+        ev.preventDefault();
+      });
+      window.addEventListener("drop", function (ev) {
+        ev.preventDefault();
+      });
+      $("m").onsubmit = function (ev) {
+        var file = fileInput.files[0];
+        if (!file || !window.FormData) return;
+        ev.preventDefault();
+        var payload = new FormData();
+        payload.append("filesize", file.size);
+        payload.append("update", file, file.name);
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/update");
+        showView(2);
+        $("n").textContent = file.name;
+        var percentEl = $("p");
+        var barEl = $("c");
+        percentEl.textContent = "0%";
+        barEl.style.width = "0";
+        $("d").textContent = "0 B / " + formatSize(file.size);
+        xhr.upload.onprogress = function (e) {
+          if (!e.lengthComputable) return;
+          var pct = Math.min(100, Math.round((e.loaded / e.total) * 100));
+          percentEl.textContent = pct + "%";
+          barEl.style.width = pct + "%";
+          $("d").textContent = formatSize(e.loaded) + " / " + formatSize(e.total);
+        };
+        xhr.onload = function () {
+          var ok = xhr.status < 300;
+          $("rt").textContent = ok ? "Firmware written" : "Update failed";
+          $("rb").textContent = ok
+            ? "The device restarts now into the new firmware."
+            : (xhr.responseText || "Write failed. Check the serial log and retry.").replace(/\s+/g, " ");
+          document.body.className = ok ? "ok" : "er";
+          showView(3);
+        };
+        xhr.onerror = function () {
+          document.body.className = "er";
+          $("rt").textContent = "Update failed";
+          $("rb").textContent = "Connection lost during the transfer.";
+          showView(3);
+        };
+        xhr.send(payload);
+      };
+      syncFileState();
+    })();
+  </script>
+</body>
+</html>

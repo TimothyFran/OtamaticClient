@@ -6,137 +6,71 @@
 #include "OtamaticClientEvent.h"
 #include "OtamaticVersionCheckData.h"
 
+class OtamaticWebPortal;
+
 // Version of the OtamaticClient library itself.
-#define OTAMATIC_CLIENT_VERSION "0.2.0"
+#define OTAMATIC_CLIENT_VERSION "0.3.0"
 
 class OtamaticClient {
 public:
-    /**
-     * Create an unbound client. A transport must be attached with
-     * setClient() before any network operation can be performed.
-     * Useful when the network client instance is created/destroyed at
-     * runtime (e.g. Ethernet -> Wi-Fi fallback): all the configuration
-     * (host, key, interval, event handler...) survives the rebind.
-     */
+    /** Create an unbound client. Call setClient() before begin(). */
     OtamaticClient() = default;
-    ~OtamaticClient() = default;
+    ~OtamaticClient();
 
     /**
-     * Bind the client to an externally managed Client instance. Can be
-     * called at any time, including while the device is running, to switch
-     * to a different transport (e.g. after a network interface change).
-     * All previously configured settings are preserved.
-     * @param client The new transport; must not be nullptr and must outlive
-     *               the OtamaticClient instance.
-     * @return true if the client was bound, false if client is nullptr
-     *         (the previous binding, if any, is kept).
+     * Bind an externally managed transport. Settings survive rebinds.
+     * @param client Must not be nullptr and must outlive this instance.
      */
     bool setClient(Client* client);
 
-    /**
-     * @return The currently bound transport, or nullptr if none is bound.
-     */
     Client* getClient() const { return _client; }
 
-    /**
-     * Initialize the library.
-     * @param currentFwVersion The current firmware version.
-     * @return true if the library was initialized successfully, false otherwise.
-     */
+    /** Initialize the library. @param serviceKey 48-character service key. */
     bool begin(uint32_t currentFwVersion, const char* serviceKey);
-    
-    /**
-     * Check if there is a new version available and apply it if needed.
-     * Call this method in your loop() function.
-     */
+
+    /** Check for updates and service the portal. Call from loop(). */
     void loop();
 
-    /**
-     * Set the interval in milliseconds between two checks.
-     * @param interval The interval in milliseconds
-     */
+    /** Set the interval between version checks. */
     void setCheckInterval(uint32_t interval) { _checkInterval = interval; }
 
-    /**
-     * Force a check and update to be performed immediately instead of waiting for the next check interval.
-     * @param restartCounter true to restart the interval counter.
-     */
+    /** Run a version check immediately. @param restartCounter Restart the interval timer. */
     void requestCheckNow(bool restartCounter = true);
 
-    /**
-     * Set the callback to be called when an event occurs.
-     * @param callback The callback to be called.
-     */
+    /** Set the event callback. */
     void onEvent(void (*callback)(OtamaticClientEventData));
 
-    /**
-     * @return The current firmware version.
-     */
     uint32_t firmwareVersion() const { return _firmwareVersion; }
 
-    /**
-     * Set the device ID.
-     * @param deviceId The device Unique ID.
-     */
+    /** Set a custom device ID (default: derived from the Wi-Fi MAC). */
     void setDeviceId(uint64_t deviceId) { _deviceId = deviceId; }
 
-    /**
-     * Get the device ID.
-     * @return The device Unique ID.
-     */
     uint64_t getDeviceId();
 
-    /**
-     * Get the user friendly name of an event.
-     * @param event The event.
-     * @return The user friendly name of the event.
-     */
+    /** User-friendly event name. */
     static const __FlashStringHelper* getEventName(OtamaticClientEvent event);
 
-    /**
-     * Get the user friendly name of an error code.
-     * @param error The error code.
-     * @return The user friendly name of the error code.
-     */
+    /** User-friendly error name. */
     static const __FlashStringHelper* getErrorName(OtamaticClientError error);
 
-    /**
-     * Get the data of the last version check. It is populated when an
-     * update is found and cleared at the beginning of every check.
-     * @return A const reference to the version check data.
-     */
+    /** Data of the last version check (valid when an update was found). */
     const OtamaticVersionCheckData& getCheckData() const { return _checkData; }
 
-    /**
-     * Check if there is a valid version check result stored, meaning an
-     * update was found and not yet applied.
-     * @return true if a valid version check data is available.
-     */
+    /** @return true if an update was found and not yet applied. */
     bool hasUpdateAvailable() const { return _checkData.isValid(); }
 
-    /**
-     * Set the flag to automatically apply the update as soon as it is available.
-     * @param enable true to automatically apply the update
-     */
+    /** Apply a found update automatically (default: enabled). */
     void setAutoUpdate(bool enable) { _autoUpdate = enable; }
 
-    /**
-     * Apply the update if available.
-     * @return true if the update was applied, false otherwise.
-     */
+    /** Apply the pending update. @return true if applied. */
     bool applyUpdate();
 
-    /**
-     * Set the flag to automatically restart the device after an update.
-     * @param enable true to automatically restart the device
-     */
+    /** Restart automatically after an update (default: enabled). */
     void setAutoRestart(bool enable) { _autoRestart = enable; }
 
     /**
-     * Override the server host and port the client connects to.
-     * @param host The hostname or IP address (copied internally).
-     * @param port The port number (default 80).
-     * @return true if the host was set, false if it was null or empty.
+     * Override the update server. @param host Hostname or IP (copied internally).
+     * @return false if host is null or empty.
      */
     bool setServer(const char* host, uint16_t port = 80) {
         if (host == nullptr || host[0] == '\0') return false;
@@ -146,40 +80,34 @@ public:
         return true;
     }
 
-    /**
-     * Get the server host currently in use.
-     * @return The server host.
-     */
     const char* getServerHost() const { return _serverHost; }
 
-    /**
-     * Get the server port currently in use.
-     * @return The server port.
-     */
     uint16_t getServerPort() const { return _serverPort; }
 
-    /**
-     * Set the flag to enforce signature verification: when enabled, an update
-     * whose version check does not include a signature is rejected before
-     * downloading the firmware.
-     * @param enable true to reject unsigned updates
-     */
+    /** Reject updates without a server signature when enabled. */
     void setRequireSignature(bool enable) { _requireSignature = enable; }
 
-    /**
-     * Set the ECDSA public key used to verify the firmware signature
-     * (ECDSA over NIST P-256 with SHA-256 on the downloaded firmware).
-     * @param key The public key in PEM or Base64-encoded DER (SPKI) format.
-     */
+    /** Set the ECDSA public key (PEM or Base64 DER) for signature verification. */
     void setPublicKey(const char* key);
+
+    /**
+     * Start the local upload portal (browser firmware upload).
+     * Non-blocking: service it via loop(). Checks are suspended while active.
+     * Requires a SoC network interface (Wi-Fi or wired), not an external modem.
+     * @param timeoutMs Inactivity timeout in ms (0 = disabled).
+     */
+    bool startPortal(uint32_t timeoutMs = 0);
+
+    /** Stop the portal, aborting any upload in progress. */
+    void stopPortal();
+
+    /** @return true if the portal is active. */
+    bool isPortalActive() const;
 
 private:
 
-    /** Maximum length of the service key (48 chars + null terminator). */
     static constexpr size_t kServiceKeyMaxLen = 49;
-    /** "Bearer " prefix used in the Authorization header. */
     static constexpr const char* kBearerPrefix = "Bearer ";
-    /** Size of the buffer holding "Bearer " + service key. */
     static constexpr size_t kBearerTokenMaxLen = kServiceKeyMaxLen + 7;
 
     static constexpr size_t kServerHostMaxLen = 64;
@@ -194,7 +122,7 @@ private:
     char _publicKey[512] = {0};
     bool _autoUpdate = true;
     bool _autoRestart = true;
-    /** When true, updates without a server-provided signature are rejected before download. */
+
     bool _requireSignature = false;
 
     uint64_t _deviceId = 0;
@@ -204,54 +132,39 @@ private:
 
     OtamaticVersionCheckData _checkData;
 
-    /** Flag to prevent re-entrant/concurrent check or update operations. */
+    /** Re-entrancy guard for check/update; claimed atomically by the portal. */
     bool _busy = false;
 
-    /** Maximum time in milliseconds to wait for incoming data before considering the download stalled. */
     static constexpr uint32_t kUpdateStallTimeout = 10000;
 
-    /**
-     * Internal version check implementation, must only be called with _busy held.
-     */
     void requestCheckNowInternal(bool restartCounter);
 
-    /**
-     * Internal update implementation, must only be called with _busy held.
-     * @return true if the update was applied, false otherwise.
-     */
     bool applyUpdateInternal();
 
-    /**
-     * Get the size in bytes of the free OTA update partition,
-     * or 0 if no OTA partition is available.
-     * @return The OTA partition size in bytes.
-     */
     uint32_t getOtaPartitionSize() const;
 
-    /**
-     * Build the "Bearer <serviceKey>" Authorization header value into
-     * the provided buffer, logging a warning if the key is truncated.
-     * @param buffer The destination buffer.
-     * @param bufferSize The size of the destination buffer.
-     */
     void buildBearerToken(char* buffer, size_t bufferSize) const;
 
-    /**
-     * Verify the SHA-256 integrity hash of the downloaded firmware against
-     * the value provided by the server.
-     * @param integrityHash The computed SHA-256 digest (32 bytes).
-     * @return true if the integrity check passed.
-     */
     bool verifyIntegrity(const uint8_t* integrityHash);
 
-    /**
-     * Verify the ECDSA signature of the downloaded firmware over its
-     * SHA-256 digest, using the configured public key.
-     * @param integrityHash The computed SHA-256 digest (32 bytes).
-     * @return true if the signature check passed.
-     */
     bool verifySignature(const uint8_t* integrityHash);
 
     void transmitEvent(OtamaticClientEvent event, uint8_t data = 0) { if (_onEvent) _onEvent(OtamaticClientEventData(event, data)); }
+
+    bool beginUpdate(uint32_t size, uint32_t progressTotal);
+
+    bool writeUpdateChunk(const uint8_t* data, size_t len);
+
+    bool finalizeUpdate(bool checkIntegrity, bool checkSignature);
+
+    void abortUpdate(OtamaticClientError reason);
+
+    struct UpdateState;
+    UpdateState* _updateState = nullptr;
+
+    OtamaticWebPortal* _portal = nullptr;
+
+    friend class OtamaticWebPortal;
+
 
 };

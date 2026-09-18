@@ -116,6 +116,47 @@ A complete example is available in [examples/AdvancedExample](examples/AdvancedE
   populated when an update is found and cleared at the beginning of every new
   check; it is not persisted across reboots.
 
+### Local update portal
+
+The library also provides an alternative update transport: a minimal web page
+(stored in the firmware image, **no filesystem needed**) served by an
+`AsyncWebServer` on port 80 that allows the upload of a firmware `.bin`
+directly from a browser.
+
+```cpp
+// Non blocking: starts the server and returns immediately.
+// timeout: inactivity timeout in ms after which the portal stops itself
+// (0 to disable it). Requires an active Wi-Fi connection.
+ota.startPortal(5 * 60 * 1000UL);
+```
+
+- Call `ota.loop()` as usual: it services the portal (timeout enforcement,
+  stalled upload recovery, post-upload restart).
+- The portal stops itself after a successful upload; `stopPortal()` stops it
+  at any time and aborts any upload in progress. `isPortalActive()` reports
+  the current state.
+- The upload is written into the OTA partition by the same pipeline used by
+  `applyUpdate()`: all the update events (`UpdateStarted`, `UpdateProgress`,
+  `UpdateCompleted`, `OperationFailed`) are emitted as usual.
+- Integrity and signature verification are skipped: the binary arrives
+  directly from the user, without a version check payload. The firmware size
+  is not part of the HTTP multipart request, so the page fills a hidden field
+  from the browser `File API`: when available, the size is used to validate
+  the image against the OTA partition before writing it and to report an exact
+  `UpdateProgress` percentage; otherwise the percentage is estimated from the
+  request size. Uploads without the field (`curl`, JavaScript disabled...) are
+  still applied.
+- Periodic version checks are suspended while the portal is active.
+- The event handler is invoked from the AsyncWebServer task: do not block
+  inside it.
+- The portal is transport agnostic like the rest of the library: it works on
+  any network interface handled by the SoC network stack (Wi-Fi station or
+  soft-AP, wired interfaces), regardless of the `Client` bound with
+  `setClient()`. Being an inbound server implemented with AsyncTCP, it cannot
+  work when the connection is provided by an external modem (e.g. TinyGSM).
+- `setAutoRestart(true)` (default) reboots the device ~2s after a successful
+  upload, once the HTTP response has been delivered to the browser.
+
 ### Events
 
 `onEvent(callback)` registers a handler invoked with `OtamaticClientEventData`

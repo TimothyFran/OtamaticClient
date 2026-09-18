@@ -18,5 +18,8 @@ clear	KEYWORD2
 isValid	KEYWORD2
 autoRestart	KEYWORD2
 applyUpdate	KEYWORD2
+startPortal	KEYWORD2
+stopPortal	KEYWORD2
+isPortalActive	KEYWORD2
 setAutoUpdate KEYWORD2
 setPublicKey	KEYWORD2

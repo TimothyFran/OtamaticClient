@@ -1,4 +1,5 @@
 #include "OtamaticClient.h"
+#include "OtamaticWebPortal.h"
 #include <esp_mac.h>
 #include <esp_ota_ops.h>
 #include <HTTPClient.h>
@@ -8,6 +9,20 @@
 #include <mbedtls/pk.h>
 #include <mbedtls/base64.h>
 #include <string.h>
+
+// Shared OTA pipeline state (HTTP download and portal upload).
+struct OtamaticClient::UpdateState {
+    mbedtls_sha256_context sha = {};
+    uint32_t expectedSize = 0;
+    uint32_t progressTotal = 0;
+    size_t written = 0;
+    uint32_t lastProgress = 0;
+};
+
+OtamaticClient::~OtamaticClient() {
+    delete _updateState;
+    delete _portal;
+}
 
 bool OtamaticClient::setClient(Client* client) {
     if (client == nullptr) {
@@ -52,7 +67,26 @@ void OtamaticClient::buildBearerToken(char* buffer, size_t bufferSize) const {
 }
 
 void OtamaticClient::loop() {
-    if (millis() - _lastCheck >= _checkInterval) requestCheckNow();
+    if (_portal != nullptr) _portal->handleLoop();
+
+    if (! isPortalActive() && millis() - _lastCheck >= _checkInterval) requestCheckNow();
+}
+
+bool OtamaticClient::startPortal(uint32_t timeoutMs) {
+    if (_busy) {
+        log_w("Check or update in progress, portal start ignored");
+        return false;
+    }
+    if (_portal == nullptr) _portal = new OtamaticWebPortal(*this);
+    return _portal->start(timeoutMs);
+}
+
+void OtamaticClient::stopPortal() {
+    if (_portal != nullptr) _portal->stop();
+}
+
+bool OtamaticClient::isPortalActive() const {
+    return _portal != nullptr && _portal->isActive();
 }
 
 void OtamaticClient::onEvent(void (*callback)(OtamaticClientEventData)) {
@@ -61,7 +95,6 @@ void OtamaticClient::onEvent(void (*callback)(OtamaticClientEventData)) {
 
 void OtamaticClient::setPublicKey(const char* key) {
     if (key == nullptr) key = "";
-    // Allow PEM keys to be supplied with leading whitespace.
     while (*key == ' ' || *key == '\t' || *key == '\r' || *key == '\n') key++;
     strlcpy(_publicKey, key, sizeof(_publicKey));
     if (key[0] != '\0' && strnlen(key, sizeof(_publicKey)) >= sizeof(_publicKey) - 1) {
@@ -70,10 +103,8 @@ void OtamaticClient::setPublicKey(const char* key) {
 }
 
 /**
- * Decode the server-provided signature.
- * Expected format: hex-encoded DER signature, i.e. the DER bytes of
- * SEQUENCE { INTEGER r, INTEGER s } serialized as a hex string.
- * @return true on success; outLen is the length of the decoded DER signature.
+ * Hex-encoded DER signature (SEQUENCE { INTEGER r, INTEGER s }).
+ * @return true on success; outLen holds the decoded length.
  */
 static bool decodeSignature(const char* hex, uint8_t* out, size_t outSize, size_t& outLen) {
     size_t len = strlen(hex);
@@ -94,7 +125,6 @@ static bool decodeSignature(const char* hex, uint8_t* out, size_t outSize, size_
     }
     outLen = len / 2;
 
-    // Validate the DER envelope: SEQUENCE { INTEGER r, INTEGER s }.
     if (outLen < 8 || out[0] != 0x30 || out[1] != outLen - 2 || out[2] != 0x02) {
         return false;
     }
@@ -111,7 +141,6 @@ static bool decodeSignature(const char* hex, uint8_t* out, size_t outSize, size_
 }
 
 uint64_t OtamaticClient::getDeviceId() {
-    // If user has set a custom device ID, return it
     if (_deviceId != 0) return _deviceId;
 
     uint8_t mac[6] = {0};
@@ -144,8 +173,6 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
 
 void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     if (restartCounter) _lastCheck = millis();
-
-    // Discard metadata from the previous update check.
     _checkData.clear();
 
     transmitEvent(OtamaticClientEvent::CheckingForUpdate);
@@ -165,8 +192,6 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     char bearer[kBearerTokenMaxLen] = {0};
     buildBearerToken(bearer, sizeof(bearer));
 
-    // Collect the Transfer-Encoding header so we can detect chunked responses
-    // (HTTP 1.1) before parsing the body. By default, HTTPClient discards headers.
     const char* transferEncKeys[] = {"Transfer-Encoding"};
     http.collectHeaders(transferEncKeys, 1);
     http.addHeader("Authorization", bearer);
@@ -178,12 +203,7 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
         return;
     }
 
-    // Ex: {"version":42,"size":425984,...}
-    // Reading the stream directly bypasses HTTPClient's internal chunked
-    // transfer-encoding handling, so when the server answers with
-    // "Transfer-Encoding: chunked" we must decode the chunks first
-    // (see https://github.com/bblanchon/ArduinoJson/issues/1506), otherwise
-    // deserializeJson() fails with an invalid JSON input error.
+    // The raw stream does not decode chunked bodies; decode them first.
     JsonDocument doc;
     DeserializationError error;
     if (http.header("Transfer-Encoding") == String("chunked")) {
@@ -205,8 +225,7 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
         return;
     }
 
-    // Validate the advertised size before storing it: reading as int32_t
-    // rejects negative or overflowing values coming from malformed JSON.
+    // Reject non-positive or overflowing sizes from malformed JSON.
     const int32_t sizeValue = doc["size"] | 0;
     if (sizeValue <= 0) {
         log_e("Invalid firmware size advertised by the server: %d", (int)sizeValue);
@@ -224,7 +243,6 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
 
     log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)sizeValue);
 
-    // Store metadata for the update download and verification.
     _checkData.version = newVersion;
     _checkData.size = (uint32_t)sizeValue;
     _checkData.setSignature(doc["signature"] | "");
@@ -232,10 +250,7 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     log_i("Signature: %s", _checkData.getSignature());
     log_i("Integrity: %s", _checkData.getIntegrity());
 
-    // Reject malformed check data before downloading: the integrity hash is
-    // always mandatory (the download would be verified against it only after
-    // wasting the whole transfer), while the signature can be made mandatory
-    // in strict mode via setRequireSignature().
+    // Integrity is mandatory; signature is mandatory in strict mode.
     if (_checkData.integrity[0] == '\0') {
         log_e("Server did not provide an integrity hash, rejecting update before download");
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
@@ -278,8 +293,6 @@ bool OtamaticClient::applyUpdateInternal() {
         return false;
     }
 
-    transmitEvent(OtamaticClientEvent::UpdateStarted);
-
     HTTPClient http;
 
     char _fetchPath[51] = {0};
@@ -296,7 +309,6 @@ bool OtamaticClient::applyUpdateInternal() {
     char bearer[kBearerTokenMaxLen] = {0};
     buildBearerToken(bearer, sizeof(bearer));
 
-    // Collect the Transfer-Encoding header to detect chunked responses (HTTP 1.1)
     const char* transferEncKeys[] = {"Transfer-Encoding"};
     http.collectHeaders(transferEncKeys, 1);
 
@@ -310,64 +322,32 @@ bool OtamaticClient::applyUpdateInternal() {
         return false;
     }
 
-    const uint32_t otaPartitionSize = getOtaPartitionSize();
-    if (_checkData.size == 0 || (otaPartitionSize > 0 && _checkData.size > otaPartitionSize)) {
-        log_e("%s (size: %lu, OTA partition: %lu)",
-              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidFirmware)),
-              (unsigned long)_checkData.size, (unsigned long)otaPartitionSize);
+    const bool isChunked = http.header("Transfer-Encoding") == String("chunked");
+    ChunkDecodingStream decodedStream(http.getStream());
+    Stream* stream = isChunked ? static_cast<Stream*>(&decodedStream) : http.getStreamPtr();
+
+    if (! beginUpdate(_checkData.size, _checkData.size)) {
         http.end();
-        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return false;
     }
 
-    // Reserve the OTA partition for the expected firmware size
-    if (! Update.begin(_checkData.size, U_FLASH)) {
-        log_e("%s (Update.begin error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::BeginFailed)), Update.getError());
-        http.end();
-        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::BeginFailed);
-        return false;
-    }
-
-    log_i("Update started, version: %lu, size: %lu", (unsigned long)_checkData.version, (unsigned long)_checkData.size);
-
-    // Integrity is always verified. Signature verification is performed when
-    // both the server provided a signature and a public key has been configured.
+    // Signature is checked only when both signature and public key are available.
     const bool checkSignature = _checkData.signature[0] != '\0' && _publicKey[0] != '\0';
     if (_checkData.signature[0] != '\0' && ! checkSignature) {
         log_w("Signature provided by the server but no public key set, skipping signature verification");
     }
 
-    mbedtls_sha256_context shaCtx;
-    mbedtls_sha256_init(&shaCtx);
-    if (mbedtls_sha256_starts(&shaCtx, 0) != 0) {
-        mbedtls_sha256_free(&shaCtx);
-        Update.abort();
-        log_e("Failed to initialize SHA-256 context");
-        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
-        return false;
-    }
-
-    // Download the binary in chunks and write it to the OTA partition.
-    // Reading the raw stream bypasses HTTPClient's chunked transfer-encoding
-    // handling: if the body is chunked, the chunk markers would corrupt the
-    // firmware image written to flash, so decode the chunks first.
-    const bool isChunked = http.header("Transfer-Encoding") == String("chunked");
-    ChunkDecodingStream decodedStream(http.getStream());
-    Stream* stream = isChunked ? static_cast<Stream*>(&decodedStream) : http.getStreamPtr();
     uint8_t buffer[1024];
-    size_t written = 0;
-    uint32_t lastProgress = 0;
     uint32_t stallStart = millis();
     bool failed = false;
     OtamaticClientError failedError = OtamaticClientError::DownloadFailed;
 
-    while (written < _checkData.size && ! failed) {
+    while (_updateState->written < _checkData.size && ! failed) {
         int avail = stream->available();
         if (avail <= 0) {
-            // No data available: bail out if the connection dropped or stalled
             if (! http.connected() || millis() - stallStart > kUpdateStallTimeout) {
-                log_w("Download stalled for %lu ms or connection dropped (written: %lu/%lu)",
-                      (unsigned long)(millis() - stallStart), (unsigned long)written, (unsigned long)_checkData.size);
+                log_w("Download stalled for %lu ms or connection dropped (written: %u/%lu)",
+                      (unsigned long)(millis() - stallStart), (unsigned)_updateState->written, (unsigned long)_checkData.size);
                 failed = true;
                 failedError = OtamaticClientError::DownloadFailed;
                 break;
@@ -386,72 +366,169 @@ bool OtamaticClient::applyUpdateInternal() {
             break;
         }
 
-        size_t w = Update.write(buffer, (size_t)read);
-        if (w != (size_t)read) {
-            log_e("%s (requested: %d, written: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::WriteFailed)), read, (unsigned)w);
+        if (! writeUpdateChunk(buffer, (size_t)read)) {
             failed = true;
             failedError = OtamaticClientError::WriteFailed;
             break;
-        }
-        written += w;
-
-        mbedtls_sha256_update(&shaCtx, buffer, (size_t)read);
-
-        // Emit the progress event only when the percentage changes
-        uint32_t progress = (uint32_t)((uint64_t)written * 100 / _checkData.size);
-        if (progress != lastProgress) {
-            lastProgress = progress;
-            log_d("Update progress: %lu%% (%lu/%lu bytes)", (unsigned long)progress, (unsigned long)written, (unsigned long)_checkData.size);
-            transmitEvent(OtamaticClientEvent::UpdateProgress, (uint8_t)progress);
         }
     }
 
     http.end();
 
-    // Finalize the SHA-256 digest. The same digest is used for integrity and signature verification.
-    uint8_t integrityHash[32] = {0};
-    bool ctxOk = mbedtls_sha256_finish(&shaCtx, integrityHash) == 0;
-    mbedtls_sha256_free(&shaCtx);
-
-    if (! ctxOk) {
-        failed = true;
-        failedError = OtamaticClientError::IntegrityFailed;
-    }
-
-    if (failed || written != _checkData.size) {
-        Update.abort();
-        log_e("%s (written: %lu/%lu)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(failedError)), (unsigned long)written, (unsigned long)_checkData.size);
-        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)failedError);
+    if (failed) {
+        abortUpdate(failedError);
         return false;
     }
 
-    // Verify the firmware integrity.
-    if (! verifyIntegrity(integrityHash)) {
+    const bool success = finalizeUpdate(true, checkSignature);
+    if (success && _autoRestart) ESP.restart();
+
+    return success;
+}
+
+
+
+// Shared OTA update pipeline (all transports).
+
+bool OtamaticClient::beginUpdate(uint32_t size, uint32_t progressTotal) {
+    const bool sizeKnown = size != UPDATE_SIZE_UNKNOWN;
+    const uint32_t otaPartitionSize = getOtaPartitionSize();
+    if (sizeKnown && (size == 0 || (otaPartitionSize > 0 && size > otaPartitionSize))) {
+        log_e("%s (size: %lu, OTA partition: %lu)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidFirmware)),
+              (unsigned long)size, (unsigned long)otaPartitionSize);
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
+        return false;
+    }
+
+    if (! Update.begin(size, U_FLASH)) {
+        log_e("%s (Update.begin error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::BeginFailed)), Update.getError());
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::BeginFailed);
+        return false;
+    }
+
+    _updateState = new UpdateState();
+    _updateState->expectedSize = size;
+    _updateState->progressTotal = progressTotal;
+
+    mbedtls_sha256_init(&_updateState->sha);
+    if (mbedtls_sha256_starts(&_updateState->sha, 0) != 0) {
+        mbedtls_sha256_free(&_updateState->sha);
         Update.abort();
+        delete _updateState;
+        _updateState = nullptr;
+        log_e("Failed to initialize SHA-256 context");
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
         return false;
     }
 
-    // Verify the firmware signature when both signature and public key are available.
-    if (checkSignature && ! verifySignature(integrityHash)) {
-        Update.abort();
-        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::SignatureFailed);
+    log_i("Update started, size: %lu", (unsigned long)(sizeKnown ? size : otaPartitionSize));
+    transmitEvent(OtamaticClientEvent::UpdateStarted);
+    return true;
+}
+
+bool OtamaticClient::writeUpdateChunk(const uint8_t* data, size_t len) {
+    if (_updateState == nullptr || data == nullptr || len == 0) return false;
+
+    // Update.write() takes a non-const buffer (it does not modify it).
+    const size_t w = Update.write(const_cast<uint8_t*>(data), len);
+    if (w != len) {
+        log_e("%s (requested: %u, written: %u)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::WriteFailed)),
+              (unsigned)len, (unsigned)w);
         return false;
     }
 
-    // Finalize: verifies the written image and switches the boot partition
-    bool success = Update.end();
+    _updateState->written += w;
+    mbedtls_sha256_update(&_updateState->sha, data, len);
+
+    if (_updateState->progressTotal > 0) {
+        uint32_t progress = (uint32_t)((uint64_t)_updateState->written * 100 / _updateState->progressTotal);
+        // With unknown size the denominator is an estimate: cap at 99% until completion.
+        if (progress > 100 || (progress == 100 && _updateState->expectedSize == UPDATE_SIZE_UNKNOWN)) {
+            progress = 99;
+        }
+        if (progress != _updateState->lastProgress) {
+            _updateState->lastProgress = progress;
+            log_d("Update progress: %lu%% (%u bytes)", (unsigned long)progress, (unsigned)_updateState->written);
+            transmitEvent(OtamaticClientEvent::UpdateProgress, (uint8_t)progress);
+        }
+    }
+
+    return true;
+}
+
+bool OtamaticClient::finalizeUpdate(bool checkIntegrity, bool checkSignature) {
+    if (_updateState == nullptr) {
+        log_e("%s (no update in progress)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::WriteFailed)));
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::WriteFailed);
+        return false;
+    }
+
+    uint8_t integrityHash[32] = {0};
+    const bool ctxOk = mbedtls_sha256_finish(&_updateState->sha, integrityHash) == 0;
+    mbedtls_sha256_free(&_updateState->sha);
+
+    bool failed = ! ctxOk;
+    OtamaticClientError failedError = OtamaticClientError::IntegrityFailed;
+
+    if (! failed && _updateState->expectedSize != UPDATE_SIZE_UNKNOWN &&
+        _updateState->written != _updateState->expectedSize) {
+        failed = true;
+        failedError = OtamaticClientError::DownloadFailed;
+    }
+
+    if (failed) {
+        Update.abort();
+        log_e("%s (written: %u/%lu)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(failedError)),
+              (unsigned)_updateState->written,
+              (unsigned long)(_updateState->expectedSize == UPDATE_SIZE_UNKNOWN ? 0 : _updateState->expectedSize));
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)failedError);
+        delete _updateState;
+        _updateState = nullptr;
+        return false;
+    }
+
+    if (checkIntegrity && ! verifyIntegrity(integrityHash)) {
+        Update.abort();
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
+        delete _updateState;
+        _updateState = nullptr;
+        return false;
+    }
+
+    if (checkSignature && ! verifySignature(integrityHash)) {
+        Update.abort();
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::SignatureFailed);
+        delete _updateState;
+        _updateState = nullptr;
+        return false;
+    }
+
+    // With unknown size, finalize with the bytes actually written.
+    const bool evenIfRemaining = _updateState->expectedSize == UPDATE_SIZE_UNKNOWN;
+    const bool success = Update.end(evenIfRemaining);
     if (! success) {
         log_e("%s (Update.end error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::EndFailed)), Update.getError());
     } else {
-        log_i("Update completed, version: %lu", (unsigned long)_checkData.version);
+        log_i("Update completed, %u bytes written", (unsigned)_updateState->written);
     }
     transmitEvent(success ? OtamaticClientEvent::UpdateCompleted : OtamaticClientEvent::OperationFailed,
                   success ? (uint8_t)OtamaticClientError::None : (uint8_t)OtamaticClientError::EndFailed);
 
-    if (_autoRestart) ESP.restart();
-
+    delete _updateState;
+    _updateState = nullptr;
     return success;
+}
+
+void OtamaticClient::abortUpdate(OtamaticClientError reason) {
+    Update.abort();
+    delete _updateState;
+    _updateState = nullptr;
+    log_e("%s", reinterpret_cast<const char*>(OtamaticClient::getErrorName(reason)));
+    transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)reason);
 }
 
 
@@ -463,7 +540,6 @@ bool OtamaticClient::verifyIntegrity(const uint8_t* integrityHash) {
         return false;
     }
 
-    // Convert the computed hash to lowercase hex and compare
     char computedHex[65] = {0};
     for (size_t i = 0; i < 32; i++) {
         snprintf(computedHex + i * 2, 3, "%02x", integrityHash[i]);
@@ -489,13 +565,11 @@ bool OtamaticClient::verifySignature(const uint8_t* integrityHash) {
         return false;
     }
 
-    // Parse the key (PEM or Base64-encoded DER/SPKI)
     mbedtls_pk_context pkCtx;
     mbedtls_pk_init(&pkCtx);
     int pkRes;
     if (strncmp(_publicKey, "-----BEGIN", 10) == 0) {
         if (strstr(_publicKey, "PUBLIC KEY") != nullptr) {
-            // PEM public key: must be null-terminated, length includes the terminator
             pkRes = mbedtls_pk_parse_public_key(&pkCtx, (const uint8_t*)_publicKey, strlen(_publicKey) + 1);
         } else {
             log_e("Unsupported PEM key format");
@@ -503,7 +577,6 @@ bool OtamaticClient::verifySignature(const uint8_t* integrityHash) {
             return false;
         }
     } else {
-        // DER or Base64-encoded DER
         uint8_t der[256] = {0};
         size_t derLen = 0;
         if (mbedtls_base64_decode(der, sizeof(der), &derLen,
@@ -528,8 +601,6 @@ bool OtamaticClient::verifySignature(const uint8_t* integrityHash) {
         return false;
     }
 
-    // Verify the ECDSA P-256 signature using the SHA-256 digest computed from the firmware.
-    // The digest passed to mbedtls_pk_verify() is already SHA-256; it is not hashed again.
     int verRes = mbedtls_pk_verify(&pkCtx, MBEDTLS_MD_SHA256,
                                    integrityHash, 32, sig, sigLen);
     mbedtls_pk_free(&pkCtx);
