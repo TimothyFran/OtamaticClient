@@ -24,6 +24,8 @@ struct OtamaticClient::UpdateState {
 namespace {
 constexpr char kVerifyNamespace[] = "otamatic";
 constexpr char kVerifyKey[] = "pending_fw";
+constexpr char kIgnoredVersionKey[] = "ignored_ver";
+constexpr char kIgnoredFailuresKey[] = "ignored_cnt";
 }  // namespace
 
 OtamaticClient::~OtamaticClient() {
@@ -61,6 +63,7 @@ bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
 
     _client->setTimeout(1000);
 
+    loadIgnoredVersion();
     verifyPendingUpdate();
 
     log_i("Initialized, firmware version: %lu", (unsigned long)_firmwareVersion);
@@ -109,6 +112,98 @@ void OtamaticClient::clearPendingVersion() {
     prefs.end();
 }
 
+void OtamaticClient::loadIgnoredVersion() {
+    _ignoredVersion = 0;
+    _ignoredFailures = 0;
+    Preferences prefs;
+    if (!prefs.begin(kVerifyNamespace, false)) {
+        log_w("Cannot open NVS namespace '%s', failed-version guard starts empty", kVerifyNamespace);
+        return;
+    }
+    _ignoredVersion = prefs.getUInt(kIgnoredVersionKey, 0);
+    _ignoredFailures = (uint8_t)prefs.getUChar(kIgnoredFailuresKey, 0);
+    prefs.end();
+    if (_ignoredVersion == 0) {
+        _ignoredFailures = 0;
+        return;
+    }
+    if (_ignoredFailures == 0) _ignoredFailures = 1;
+    log_d("Loaded ignored version %lu (%u failures)", (unsigned long)_ignoredVersion, (unsigned)_ignoredFailures);
+}
+
+void OtamaticClient::storeIgnoredVersion() {
+    Preferences prefs;
+    if (!prefs.begin(kVerifyNamespace, false)) {
+        log_w("Cannot open NVS namespace '%s' for writing, ignored version %lu kept in RAM only",
+              kVerifyNamespace, (unsigned long)_ignoredVersion);
+        return;
+    }
+    if (prefs.putUInt(kIgnoredVersionKey, _ignoredVersion) == 0 ||
+        prefs.putUChar(kIgnoredFailuresKey, _ignoredFailures) == 0) {
+        log_w("Cannot persist the ignored version %lu, it will be kept in RAM only",
+              (unsigned long)_ignoredVersion);
+    } else {
+        log_i("Ignoring version %lu after %u failed attempt(s)", (unsigned long)_ignoredVersion,
+              (unsigned)_ignoredFailures);
+    }
+    prefs.end();
+}
+
+void OtamaticClient::clearIgnoredVersion() {
+    Preferences prefs;
+    if (!prefs.begin(kVerifyNamespace, false)) {
+        log_w("Cannot open NVS namespace '%s', ignored version kept", kVerifyNamespace);
+        return;
+    }
+    prefs.remove(kIgnoredVersionKey);
+    prefs.remove(kIgnoredFailuresKey);
+    prefs.end();
+}
+
+void OtamaticClient::resetIgnoredVersion() {
+    _ignoredVersion = 0;
+    _ignoredFailures = 0;
+    clearIgnoredVersion();
+    log_i("Ignored version cleared");
+}
+
+void OtamaticClient::recordFailedVersion(uint32_t version) {
+    if (version == 0) return;
+    if (_ignoredVersion != 0 && _ignoredVersion != version) {
+        log_i("Dropping ignored version %lu, now tracking failed version %lu",
+              (unsigned long)_ignoredVersion, (unsigned long)version);
+        _ignoredVersion = 0;
+        _ignoredFailures = 0;
+        clearIgnoredVersion();
+    }
+    if (_ignoredVersion == 0) {
+        _ignoredVersion = version;
+        _ignoredFailures = 1;
+    } else if (_ignoredFailures < 255) {
+        _ignoredFailures++;
+    }
+    storeIgnoredVersion();
+}
+
+void OtamaticClient::recordAttemptFailure(uint32_t version) {
+    if (_failedVersionGuard) recordFailedVersion(version);
+}
+
+void OtamaticClient::clearFailedVersion(uint32_t confirmedVersion) {
+    if (_ignoredVersion == 0) return;
+    log_i("Clearing ignored version %lu after version %lu was confirmed", (unsigned long)_ignoredVersion,
+          (unsigned long)confirmedVersion);
+    _ignoredVersion = 0;
+    _ignoredFailures = 0;
+    clearIgnoredVersion();
+}
+
+bool OtamaticClient::isVersionIgnored(uint32_t version) const {
+    if (!_failedVersionGuard || _ignoredVersion == 0 || version == 0) return false;
+    if (version != _ignoredVersion) return false;
+    return _ignoredFailures >= _maxFailedAttempts;
+}
+
 void OtamaticClient::verifyPendingUpdate() {
     const uint32_t pending = loadPendingVersion();
     if (pending == 0) {
@@ -132,6 +227,7 @@ void OtamaticClient::verifyPendingUpdate() {
         clearPendingVersion();
         _verifyState = VerifyState::RolledBack;
         _pendingVersion = 0;
+        recordAttemptFailure(pending);
         transmitEvent(OtamaticClientEvent::UpdateRolledBack);
         if (Update.canRollBack()) {
             log_w("Rolling back to the previous firmware");
@@ -151,6 +247,7 @@ void OtamaticClient::verifyPendingUpdate() {
             clearPendingVersion();
             _verifyState = VerifyState::Rejected;
             _pendingVersion = 0;
+            recordAttemptFailure(pending);
             transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::VerificationFailed);
             transmitEvent(OtamaticClientEvent::UpdateRolledBack);
             if (Update.canRollBack()) {
@@ -167,6 +264,7 @@ void OtamaticClient::verifyPendingUpdate() {
     clearPendingVersion();
     _verifyState = VerifyState::Confirmed;
     _pendingVersion = 0;
+    clearFailedVersion(pending);
     transmitEvent(OtamaticClientEvent::UpdateConfirmed);
 }
 
@@ -358,10 +456,18 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
         return;
     }
 
+    if (isVersionIgnored(newVersion)) {
+        log_w("Version %lu ignored after %u failed attempt(s), waiting for a newer version",
+              (unsigned long)newVersion, (unsigned)_ignoredFailures);
+        transmitEvent(OtamaticClientEvent::UpdateIgnored);
+        return;
+    }
+
     // Reject non-positive or overflowing sizes from malformed JSON.
     const int32_t sizeValue = doc["size"] | 0;
     if (sizeValue <= 0) {
         log_e("Invalid firmware size advertised by the server: %d", (int)sizeValue);
+        recordAttemptFailure(newVersion);
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return;
     }
@@ -370,28 +476,30 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
     if (otaPartitionSize > 0 && (uint32_t)sizeValue > otaPartitionSize) {
         log_e("Firmware size %lu exceeds the OTA partition size %lu",
               (unsigned long)sizeValue, (unsigned long)otaPartitionSize);
+        recordAttemptFailure(newVersion);
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return;
     }
-
-    log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)sizeValue);
 
     _checkData.version = newVersion;
     _checkData.size = (uint32_t)sizeValue;
     _checkData.setSignature(doc["signature"] | "");
     _checkData.setIntegrity(doc["integrity"] | "");
+    log_i("Update available, version: %lu, size: %lu", (unsigned long)newVersion, (unsigned long)sizeValue);
     log_i("Signature: %s", _checkData.getSignature());
     log_i("Integrity: %s", _checkData.getIntegrity());
 
     // Integrity is mandatory; signature is mandatory in strict mode.
     if (_checkData.integrity[0] == '\0') {
         log_e("Server did not provide an integrity hash, rejecting update before download");
+        recordAttemptFailure(newVersion);
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::IntegrityFailed);
         _checkData.clear();
         return;
     }
     if (_requireSignature && _checkData.signature[0] == '\0') {
         log_e("Signature enforcement enabled but the server did not provide a signature, rejecting update before download");
+        recordAttemptFailure(newVersion);
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::SignatureFailed);
         _checkData.clear();
         return;
@@ -441,6 +549,16 @@ bool OtamaticClient::applyUpdateInternal() {
         return false;
     }
 
+    if (isVersionIgnored(_checkData.version)) {
+        log_w("Version %lu ignored after %u failed attempt(s), applyUpdate() refused",
+              (unsigned long)_checkData.version, (unsigned)_ignoredFailures);
+        transmitEvent(OtamaticClientEvent::UpdateIgnored);
+        _checkData.clear();
+        return false;
+    }
+
+    const uint32_t targetVersion = _checkData.version;
+
     HTTPClient http;
 
     char _fetchPath[51] = {0};
@@ -450,6 +568,7 @@ bool OtamaticClient::applyUpdateInternal() {
     NetworkClient& netClient = *static_cast<NetworkClient*>(_client);
     if(! http.begin(netClient, _serverHost, _serverPort, _fetchPath)) {
         log_e("%s (host: %s:%u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::ConnectionFailed)), _serverHost, _serverPort);
+        recordAttemptFailure(targetVersion);
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::ConnectionFailed);
         return false;
     }
@@ -466,6 +585,7 @@ bool OtamaticClient::applyUpdateInternal() {
     if (httpCode != 200) {
         log_e("%s, HTTP code: %d", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::HttpFailed)), httpCode);
         http.end();
+        recordAttemptFailure(targetVersion);
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::HttpFailed);
         return false;
     }
@@ -476,6 +596,7 @@ bool OtamaticClient::applyUpdateInternal() {
 
     if (! beginUpdate(_checkData.size, _checkData.size, OtamaticUpdateTarget::Firmware)) {
         http.end();
+        recordAttemptFailure(targetVersion);
         return false;
     }
 
@@ -525,6 +646,7 @@ bool OtamaticClient::applyUpdateInternal() {
 
     if (failed) {
         abortUpdate(failedError);
+        recordAttemptFailure(targetVersion);
         return false;
     }
 
@@ -533,6 +655,8 @@ bool OtamaticClient::applyUpdateInternal() {
     if (success) {
         _checkData.clear();
         if (_autoRestart) ESP.restart();
+    } else {
+        recordAttemptFailure(targetVersion);
     }
 
     return success;
@@ -787,6 +911,7 @@ const __FlashStringHelper* OtamaticClient::getEventName(OtamaticClientEvent even
         case OtamaticClientEvent::CheckingForUpdate: return F("Checking for update");
         case OtamaticClientEvent::UpdateAvailable: return F("Update available");
         case OtamaticClientEvent::UpdateNotNeeded: return F("Update not needed");
+        case OtamaticClientEvent::UpdateIgnored: return F("Update ignored");
         case OtamaticClientEvent::UpdateStarted: return F("Update started");
         case OtamaticClientEvent::UpdateProgress: return F("Update progress");
         case OtamaticClientEvent::UpdateCompleted: return F("Update completed");

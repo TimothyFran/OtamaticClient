@@ -32,3 +32,10 @@ verifyState	KEYWORD2
 pendingVersion	KEYWORD2
 setAutoUpdate KEYWORD2
 setPublicKey	KEYWORD2
+setFailedVersionGuard KEYWORD2
+failedVersionGuard KEYWORD2
+setMaxFailedAttempts KEYWORD2
+maxFailedAttempts KEYWORD2
+ignoredVersion KEYWORD2
+ignoredVersionFailures KEYWORD2
+resetIgnoredVersion KEYWORD2

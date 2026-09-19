@@ -9,6 +9,7 @@ enum class OtamaticClientEvent {
     CheckingForUpdate,  // Start of a version check cycle
     UpdateAvailable,    // A new firmware version was found
     UpdateNotNeeded,    // No update available
+    UpdateIgnored,      // Remote version ignored after too many failed attempts
     UpdateStarted,      // Writing of the new image has started (firmware or filesystem)
     UpdateProgress,     // Image write progress
     UpdateCompleted,    // Update completed (reboot imminent with setAutoRestart(true))

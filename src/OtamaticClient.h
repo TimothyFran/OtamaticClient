@@ -144,6 +144,41 @@ public:
     uint32_t pendingVersion() const { return _verifyState == VerifyState::Pending ? _pendingVersion : 0; }
 
     /**
+     * Enable or disable the failed-version guard that prevents an
+     * update/rollback loop (enabled by default).
+     *
+     * When enabled, every failed attempt for the same remote version is
+     * counted (download errors, integrity/signature rejections and
+     * post-reboot verification failures). Once the counter reaches
+     * maxFailedAttempts() that version is ignored: the device stays on
+     * the running version until the server offers a *different* (newer)
+     * version. The counter resets when any update is confirmed, when a
+     * different version fails, or via resetIgnoredVersion().
+     */
+    void setFailedVersionGuard(bool enable) { _failedVersionGuard = enable; }
+
+    bool failedVersionGuard() const { return _failedVersionGuard; }
+
+    /**
+     * How many failed attempts for the same version are tolerated
+     * before that version is ignored (default: 3, minimum: 1).
+     * The counter resets when any update is confirmed, when a different
+     * version fails, or via resetIgnoredVersion().
+     */
+    void setMaxFailedAttempts(uint8_t attempts) { _maxFailedAttempts = attempts == 0 ? 1 : attempts; }
+
+    uint8_t maxFailedAttempts() const { return _maxFailedAttempts; }
+
+    /** @return the currently ignored version, 0 when none. */
+    uint32_t ignoredVersion() const { return _ignoredVersion; }
+
+    /** @return failures recorded for ignoredVersion(), 0 when none. */
+    uint8_t ignoredVersionFailures() const { return _ignoredFailures; }
+
+    /** Forget the ignored version and its failure counter (RAM + NVS). */
+    void resetIgnoredVersion();
+
+    /**
      * Override the update server. @param host Hostname or IP (copied internally).
      * @return false if host is null or empty.
      */
@@ -203,6 +238,10 @@ private:
     bool _autoUpdate = true;
     bool _autoRestart = true;
     bool _rollbackVerification = true;
+    bool _failedVersionGuard = true;
+    uint8_t _maxFailedAttempts = 3;
+    uint32_t _ignoredVersion = 0;
+    uint8_t _ignoredFailures = 0;
     VerifyState _verifyState = VerifyState::None;
     uint32_t _pendingVersion = 0;
     VerifyResult (*_onVerify)() = nullptr;
@@ -229,6 +268,14 @@ private:
     uint32_t loadPendingVersion() const;
     void storePendingVersion(uint32_t version);
     void clearPendingVersion();
+
+    void loadIgnoredVersion();
+    void storeIgnoredVersion();
+    void clearIgnoredVersion();
+    void recordFailedVersion(uint32_t version);
+    void recordAttemptFailure(uint32_t version);
+    void clearFailedVersion(uint32_t confirmedVersion);
+    bool isVersionIgnored(uint32_t version) const;
 
     void verifyPendingUpdate();
 
