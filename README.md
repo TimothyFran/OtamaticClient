@@ -105,6 +105,9 @@ that lets you upload a firmware `.bin` directly from a browser.
 
 ```cpp
 ota.startPortal(5 * 60 * 1000UL);  // timeout in ms (0 to disable it)
+
+// Optional HTTP Basic auth (disabled by default).
+ota.startPortal(5 * 60 * 1000UL, "admin", "secret");
 ```
 
 - Non-blocking: call `ota.loop()` as usual to service it.

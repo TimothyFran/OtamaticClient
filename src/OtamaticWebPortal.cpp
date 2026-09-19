@@ -81,11 +81,19 @@ OtamaticWebPortal::~OtamaticWebPortal() {
     stop();
 }
 
-bool OtamaticWebPortal::start(uint32_t timeoutMs) {
+bool OtamaticWebPortal::start(uint32_t timeoutMs, const char* username, const char* password) {
     if (_active) {
         log_w("Portal already active, keeping the current instance");
         return true;
     }
+
+    const bool authEnabled = username != nullptr && username[0] != '\0' &&
+                             password != nullptr && password[0] != '\0';
+    if ((username != nullptr || password != nullptr) && ! authEnabled) {
+        log_w("Portal auth needs both username and password, starting without auth");
+    }
+    strlcpy(_authUser, authEnabled ? username : "", sizeof(_authUser));
+    strlcpy(_authPass, authEnabled ? password : "", sizeof(_authPass));
 
     const IPAddress localIp = getLocalIp();
     if (localIp == IPAddress(IPADDR_NONE)) {
@@ -97,7 +105,11 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs) {
     _server = new AsyncWebServer(kPortalPort);
 
     // Update form, served gzipped from flash.
-    _server->on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+    _server->on("/", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        if (! checkAuth(request)) {
+            request->requestAuthentication(AsyncAuthType::AUTH_BASIC, kAuthRealm);
+            return;
+        }
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html", index_html_gz, index_html_gz_len);
         response->addHeader("Content-Encoding", "gzip");
@@ -105,6 +117,10 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs) {
     });
 
     _server->on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        if (! checkAuth(request)) {
+            request->requestAuthentication(AsyncAuthType::AUTH_BASIC, kAuthRealm);
+            return;
+        }
         // Fixed numeric part: {"deviceId":"<20>","firmwareVersion":<10>}
         // plus optional ,"versionName":"<31*6>" ,"portalTitle":"<31*6>"
         // (worst case: every char escaped as \u00XX). Stack-only, no JSON lib.
@@ -141,8 +157,15 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs) {
     });
 
     // Firmware upload: the request handler reports the final outcome.
+    // NOTE: the multipart body chunks (handleUpload) cannot be auth-gated per
+    // chunk without buffering, so auth is checked on the final POST handler and
+    // the upload handler rejects chunks when the session was never authed.
     _server->on("/update", HTTP_POST,
         [this](AsyncWebServerRequest* request) {
+            if (! checkAuth(request)) {
+                request->requestAuthentication(AsyncAuthType::AUTH_BASIC, kAuthRealm);
+                return;
+            }
             bool done = false;
             bool succeeded = false;
             withState([&](SharedState& s) {
@@ -180,9 +203,15 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs) {
         s.succeeded = false;
         s.bytesWritten = 0;
     });
-    log_i("Update portal started on http://%s/ (timeout: %lu ms)",
-          localIp.toString().c_str(), (unsigned long)_timeoutMs);
+    log_i("Update portal started on http://%s/ (timeout: %lu ms%s)",
+          localIp.toString().c_str(), (unsigned long)_timeoutMs,
+          _authUser[0] != '\0' ? ", auth: on" : "");
     return true;
+}
+
+bool OtamaticWebPortal::checkAuth(AsyncWebServerRequest* request) const {
+    if (_authUser[0] == '\0' || _authPass[0] == '\0') return true;  // auth disabled
+    return request->authenticate(_authUser, _authPass);
 }
 
 void OtamaticWebPortal::stop() {
@@ -218,6 +247,8 @@ void OtamaticWebPortal::stop() {
         delete _server;
         _server = nullptr;
     }
+    _authUser[0] = '\0';
+    _authPass[0] = '\0';
     _active = false;
     log_i("Update portal stopped");
 }
@@ -292,6 +323,13 @@ void OtamaticWebPortal::handleUpload(AsyncWebServerRequest* request, const Strin
                                      size_t index, uint8_t* data, size_t len, bool final) {
     (void)filename;
 
+    // The upload body handler runs per chunk outside the POST response handler:
+    // reject unauthenticated streams before touching flash (defense in depth:
+    // the POST response handler re-checks auth before reporting success).
+    if (! checkAuth(request)) {
+        if (index == 0) log_w("Upload rejected, authentication required");
+        return;
+    }
     if (index == 0) {
         bool rejected = false;
         withState([&](SharedState& s) {

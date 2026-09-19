@@ -25,8 +25,12 @@ public:
      * Start the portal. Call from loop().
      * Requires a SoC network interface (Wi-Fi or wired), not an external modem.
      * @param timeoutMs Inactivity timeout in ms (0 = disabled).
+     * @param username HTTP Basic auth username (nullptr = auth disabled).
+     * @param password HTTP Basic auth password (nullptr = auth disabled).
+     * Auth is active only when BOTH are non-null and non-empty.
      */
-    bool start(uint32_t timeoutMs = 0);
+    bool start(uint32_t timeoutMs = 0, const char* username = nullptr,
+               const char* password = nullptr);
 
     /** Stop the portal, aborting any upload in progress. Call from loop(). */
     void stop();
@@ -95,6 +99,14 @@ private:
 
     mutable portMUX_TYPE _stateLock = portMUX_INITIALIZER_UNLOCKED;
     SharedState _shared;
+
+    /** Returns true when a request passed HTTP Basic auth (or auth disabled). */
+    bool checkAuth(AsyncWebServerRequest* request) const;
+
+    static constexpr size_t kAuthMaxLen = 33;  // 32 chars + NUL
+    char _authUser[kAuthMaxLen] = {0};
+    char _authPass[kAuthMaxLen] = {0};
+    static constexpr char kAuthRealm[] = "Otamatic";
 
     static constexpr uint32_t kUploadStallTimeout = 10000;
     static constexpr uint32_t kPostUploadGrace = 2000;

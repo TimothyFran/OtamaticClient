@@ -117,14 +117,12 @@ public:
 
     /**
      * Start the local upload portal (browser firmware upload).
-     * Non-blocking: service it via loop(). It may stay active in the
-     * background: version checks keep running and never block a browser
-     * upload, while the firmware write itself is exclusive (a remote download
-     * rejects uploads and vice versa).
-     * Requires a SoC network interface (Wi-Fi or wired), not an external modem.
-     * @param timeoutMs Inactivity timeout in ms (0 = disabled).
+     * Requires an active SoC network interface (Wi-Fi or wired).
+     * @param timeoutMs Inactivity timeout in ms (0 = no timeout).
+     * @param username HTTP Basic auth username (nullptr = auth disabled).
+     * @param password HTTP Basic auth password (nullptr = auth disabled).
      */
-    bool startPortal(uint32_t timeoutMs = 0);
+    bool startPortal(uint32_t timeoutMs = 0, const char* username = nullptr, const char* password = nullptr);
 
     /** Stop the portal, aborting any upload in progress. */
     void stopPortal();
