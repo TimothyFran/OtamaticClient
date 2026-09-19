@@ -38,6 +38,43 @@ static uint32_t parseDeclaredSize(const String& value) {
     return size;
 }
 
+/**
+ * Append src escaped for JSON (" -> \", backslash, control chars -> \u00XX)
+ * into dst (always NUL-terminated). Returns false when truncated.
+ */
+static bool appendJsonEscaped(char* dst, size_t dstSize, size_t& pos, const char* src) {
+    for (const char* p = src; *p != '\0'; p++) {
+        const char c = *p;
+        const char* esc = nullptr;
+        char uni[7] = {0};
+        if (c == '"' || c == '\\') {
+            if (pos + 2 >= dstSize) return false;
+            dst[pos++] = '\\';
+            dst[pos++] = c;
+        } else if (c == '\n') {
+            esc = "\\n";
+        } else if (c == '\r') {
+            esc = "\\r";
+        } else if (c == '\t') {
+            esc = "\\t";
+        } else if ((unsigned char)c < 0x20) {
+            snprintf(uni, sizeof(uni), "\\u%04x", (unsigned)c);
+            esc = uni;
+        }
+        if (esc != nullptr) {
+            const size_t len = strlen(esc);
+            if (pos + len >= dstSize) return false;
+            memcpy(dst + pos, esc, len);
+            pos += len;
+        } else if (esc == nullptr && c != '"' && c != '\\') {
+            if (pos + 1 >= dstSize) return false;
+            dst[pos++] = c;
+        }
+    }
+    dst[pos] = '\0';
+    return true;
+}
+
 OtamaticWebPortal::OtamaticWebPortal(OtamaticClient& client) : _client(client) {}
 
 OtamaticWebPortal::~OtamaticWebPortal() {
@@ -64,6 +101,42 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs) {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html", index_html_gz, index_html_gz_len);
         response->addHeader("Content-Encoding", "gzip");
+        request->send(response);
+    });
+
+    _server->on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        // Fixed numeric part: {"deviceId":"<20>","firmwareVersion":<10>}
+        // plus optional ,"versionName":"<31*6>" ,"portalTitle":"<31*6>"
+        // (worst case: every char escaped as \u00XX). Stack-only, no JSON lib.
+        // 64B covers the numeric part with margin; snprintf never truncates it.
+        char payload[64 + 2 * (15 + 31 * 6)];
+        size_t pos = (size_t)snprintf(payload, sizeof(payload), "{\"deviceId\":\"%llu\",\"firmwareVersion\":%lu",
+                 (unsigned long long)_client.getDeviceId(),
+                 (unsigned long)_client.firmwareVersion());
+            const char* extra[2] = {_client.versionName(), _client.portalTitle()};
+            const char* keys[2] = {"versionName", "portalTitle"};
+            for (int i = 0; i < 2; i++) {
+                if (extra[i][0] == '\0') continue;
+                const size_t keyLen = strlen(keys[i]);
+                if (pos + 4 + keyLen >= sizeof(payload)) break;
+                payload[pos++] = ',';
+                payload[pos++] = '"';
+                memcpy(payload + pos, keys[i], keyLen);
+                pos += keyLen;
+                payload[pos++] = '"';
+                payload[pos++] = ':';
+                payload[pos++] = '"';
+                if (! appendJsonEscaped(payload, sizeof(payload), pos, extra[i])) break;
+                if (pos + 1 >= sizeof(payload)) break;
+                payload[pos++] = '"';
+                payload[pos] = '\0';
+            }
+            if (pos + 1 < sizeof(payload)) {
+                payload[pos++] = '}';
+                payload[pos] = '\0';
+            }
+        AsyncWebServerResponse* response = request->beginResponse(200, "application/json", payload);
+        response->addHeader("Cache-Control", "no-store");
         request->send(response);
     });
 

@@ -25,9 +25,44 @@
       justify-content: center;
       min-height: 100vh;
     }
-    main { width: min(420px, 100%); padding: 28px 20px; }
-    header { margin-bottom: 26px; }
-    .lg { display: block; width: 150px; }
+    main { width: min(420px, 100%); padding: 28px 20px 34px; }
+    header { display: flex; justify-content: center; margin-bottom: 22px; }
+    .lg { display: block; width: 182px; height: auto; }
+    .dv {
+      margin: 0 0 20px;
+      padding: 12px 14px;
+      background: #fff;
+      border: 1px solid var(--bd);
+      border-radius: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .dv[hidden] { display: none; }
+    .dv-t {
+      margin: 0;
+      font: 700 10.5px ui-monospace, Consolas, monospace;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #8a97ad;
+    }
+    .dv-r {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin: 0;
+      font-size: 12.5px;
+    }
+    .dv-r dt { color: var(--dm); }
+    .dv-r span:first-child { color: var(--dm); }
+    .dv-r span:last-child,
+    .dv-r dd {
+      margin: 0;
+      font: 600 12.5px ui-monospace, Consolas, monospace;
+      color: var(--tx);
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
     h1 { font-size: 22px; margin: 0 0 6px; }
     .sub { margin: 0 0 22px; color: var(--dm); font-size: 14px; }
     .sub code {
@@ -80,7 +115,18 @@
     }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     button:not(:disabled):hover { filter: brightness(1.06); }
-    .nt { font-size: 12px; color: #7e8aa0; margin: 14px 0 0; }
+    .nt { font-size: 12px; color: #7e8aa0; margin: 14px 0 0; text-align: center; }
+    /* Signature warning: hugs the button, device card breathes below it. */
+    .nt-warn { margin: 8px 0 26px; }
+    #vn-r[hidden] { display: none; }
+    .ft {
+      margin: 26px 0 0;
+      text-align: center;
+      font-size: 11.5px;
+      color: #9aa6ba;
+    }
+    .ft a { color: inherit; text-decoration: none; }
+    .ft a:hover { color: var(--bl); text-decoration: underline; }
     .pb {
       height: 12px;
       border: 1px solid var(--bd);
@@ -139,7 +185,7 @@
     </header>
     <section id="v1">
       <h1>Firmware update</h1>
-      <p class="sub">Select a <code>.bin</code> firmware and write it to this device. It reboots when done.</p>
+      <p class="sub">Select a <code>.bin</code> firmware and write it to this device.</p>
       <form id="m" method="POST" action="/update" enctype="multipart/form-data">
         <input type="hidden" name="filesize" id="s" value="">
         <label class="sel">
@@ -152,8 +198,14 @@
           <span class="b2">Browse files</span>
         </label>
         <button id="b" type="submit">Write to device</button>
-        <p class="nt">Local uploads skip signature checks: flash only firmware you trust.</p>
+        <p class="nt nt-warn">Local uploads skip signature checks: flash only firmware you trust.</p>
       </form>
+    </section>
+    <section class="dv" id="dv" hidden aria-live="polite">
+      <p class="dv-t">Device</p>
+      <div class="dv-r"><span>Device ID</span><span id="di">–</span></div>
+      <div class="dv-r"><span>Firmware Version</span><span id="fv">–</span></div>
+      <div class="dv-r" id="vn-r" hidden><span>Version Name</span><span id="vn">–</span></div>
     </section>
     <section id="v2" hidden>
       <h1>Writing firmware</h1>
@@ -167,6 +219,9 @@
       <p class="sub" id="rb"></p>
       <button id="a" type="button">Flash another firmware</button>
     </section>
+    <footer class="ft">
+      <a href="https://github.com/TimothyFran/OtamaticClient">OtamaticClient on GitHub</a>
+    </footer>
   </main>
   <script>
     (function () {
@@ -178,6 +233,31 @@
       var submitButton = $("b");
       var fileLabel = $("e");
       var dropZone = document.querySelector(".sel");
+      function loadDeviceInfo() {
+        var card = $("dv");
+        function show(id, value) {
+          if (value === undefined || value === null || value === "") return false;
+          $(id).textContent = value;
+          card.hidden = false;
+          return true;
+        }
+        
+        if (!window.fetch) return;
+        fetch("/api/info", { headers: { Accept: "application/json" } }).then(function (r) {
+          if (!r.ok) return null;
+          return r.json();
+        }).then(function (info) {
+          if (!info) return;
+          show("di", info.deviceId);
+          show("fv", info.firmwareVersion);
+          if (show("vn", info.versionName)) $("vn-r").hidden = false;
+          if (typeof info.portalTitle === "string" && info.portalTitle !== "") {
+            document.title = info.portalTitle;
+            var h1 = document.querySelector("#v1 h1");
+            if (h1) h1.textContent = info.portalTitle;
+          }
+        }).catch(function () {});
+      }
       function formatSize(bytes) {
         if (bytes > 1048576) {
           return (bytes / 1048576).toFixed(2) + " MB";
@@ -271,6 +351,7 @@
         xhr.send(payload);
       };
       syncFileState();
+      loadDeviceInfo();
     })();
   </script>
 </body>

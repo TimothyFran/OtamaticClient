@@ -43,6 +43,30 @@ public:
 
     uint32_t firmwareVersion() const { return _firmwareVersion; }
 
+    /**
+     * Optional human-readable version name shown in the portal
+     * (e.g. "v1.2.3-beta"). Empty by default (field hidden).
+     * Copied internally (31 chars max, truncated).
+     */
+    void setVersionName(const char* name) {
+        if (name == nullptr) _versionName[0] = '\0';
+        else strlcpy(_versionName, name, sizeof(_versionName));
+    }
+
+    const char* versionName() const { return _versionName; }
+
+    /**
+     * Optional portal page title (H1 + <title>). Empty by default,
+     * keeping "Firmware update" / "Otamatic update".
+     * Copied internally (31 chars max, truncated).
+     */
+    void setPortalTitle(const char* title) {
+        if (title == nullptr) _portalTitle[0] = '\0';
+        else strlcpy(_portalTitle, title, sizeof(_portalTitle));
+    }
+
+    const char* portalTitle() const { return _portalTitle; }
+
     /** Set a custom device ID (default: derived from the Wi-Fi MAC). */
     void setDeviceId(uint64_t deviceId) { _deviceId = deviceId; }
 
@@ -118,6 +142,10 @@ private:
     const char* _serverHost = "otamatic.eu";
     char _serverHostBuf[kServerHostMaxLen] = {0};
     uint16_t _serverPort = 80;
+
+    static constexpr size_t kPortalTextMaxLen = 32;
+    char _versionName[kPortalTextMaxLen] = {0};
+    char _portalTitle[kPortalTextMaxLen] = {0};
 
     uint32_t _checkInterval = 5 * 60 * 1000;
     uint32_t _lastCheck = 0;
