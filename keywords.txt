@@ -8,6 +8,8 @@ OtamaticClientEventData	KEYWORD1
 OtamaticClientError	KEYWORD1
 OtamaticUpdateTarget	KEYWORD1
 OtamaticVersionCheckData	KEYWORD1
+OtamaticClient::VerifyResult	KEYWORD1
+OtamaticClient::VerifyState	KEYWORD1
 
 begin	KEYWORD2
 setCheckInterval	KEYWORD2
@@ -22,5 +24,11 @@ applyUpdate	KEYWORD2
 startPortal	KEYWORD2
 stopPortal	KEYWORD2
 isPortalActive	KEYWORD2
+setAutoRestart	KEYWORD2
+setRollbackVerification	KEYWORD2
+rollbackVerification	KEYWORD2
+onVerify	KEYWORD2
+verifyState	KEYWORD2
+pendingVersion	KEYWORD2
 setAutoUpdate KEYWORD2
 setPublicKey	KEYWORD2

@@ -88,6 +88,9 @@ A complete example is available in [examples/AdvancedExample](examples/AdvancedE
 - `setDeviceId(id)` / `getDeviceId()`: device ID (default: ESP32 station MAC).
 - `setAutoUpdate(enable)`: disable to only report updates via the `UpdateAvailable` event and apply them manually with `applyUpdate()`.
 - `setAutoRestart(enable)`: disable to reboot manually with `ESP.restart()` when `UpdateCompleted` is received.
+- `setRollbackVerification(enable)`: post-reboot verification of remote firmware updates (enabled by default, portal uploads excluded, see "Rollback verification").
+- `onVerify(callback)`: optional user self-test run by `begin()` before a pending remote update is confirmed (see "Rollback verification").
+- `verifyState()` / `pendingVersion()`: state of the last verification performed by `begin()`.
 - `setPublicKey(key)`: ECDSA public key for signature verification (see "Firmware verification").
 - `firmwareVersion()` / `getCheckData()` / `hasUpdateAvailable()`: inspect the running version and the result of the last check (not persisted across reboots).
 
@@ -136,6 +139,8 @@ The page is embedded gzipped in `src/PortalPage.h`: after editing
 | `UpdateStarted` | – | Writing of the new firmware started |
 | `UpdateProgress` | Progress % (0-100) | Firmware write progress |
 | `UpdateCompleted` | – | Update completed (device ready to reboot) |
+| `UpdateConfirmed` | – | Pending remote update verified after reboot |
+| `UpdateRolledBack` | – | Pending remote update did not boot (rollback detected or forced) |
 | `OperationFailed` | `OtamaticClientError` code | Operation failed, see below |
 
 Error codes reported with `OperationFailed`:
@@ -155,6 +160,30 @@ Error codes reported with `OperationFailed`:
 | `SignatureFailed` | The signature of the downloaded firmware does not match |
 | `ConfigInvalid` | Invalid configuration (e.g. `begin()` called with an invalid service key, or before `setClient()`) |
 | `InvalidImage` | The uploaded image does not match the selected target (refused before any flash write) |
+| `VerificationFailed` | The `onVerify()` callback rejected the new firmware after reboot |
+
+### Rollback verification
+
+Remote firmware updates (server downloads, not portal uploads) are verified automatically on the next boot. The flow needs no explicit check in the sketch: after a successful download the library persists the expected version in NVS; the next `begin()` compares it with the running version:
+
+- versions match → the update is confirmed (`UpdateConfirmed`), the pending record is cleared;
+- versions differ (the new image never booted, the bootloader rolled back, or the sketch was flashed over USB) → `UpdateRolledBack` is emitted, the record is cleared, and when a previous image exists the library calls `Update.rollBack()` + restart to go back to it.
+
+The check is optional but enabled by default; `setRollbackVerification(false)` must be called before `begin()` to disable it (any stale pending record is then dropped silently). Filesystem images and portal uploads never create a pending record; a portal boot only clears nothing and leaves the remote flow untouched.
+
+For application-level self-tests, register a callback **before** `begin()`:
+
+```cpp
+OtamaticClient::VerifyResult verifyFirmware() {
+    const bool sensorsOk = readSensors();
+    return sensorsOk ? OtamaticClient::VerifyResult::Valid
+                     : OtamaticClient::VerifyResult::Invalid;
+}
+
+ota.onVerify(verifyFirmware);
+```
+
+The callback runs synchronously inside `begin()`, only when the versions already match. Keep it short and non-blocking: returning `VerifyResult::Invalid` emits `OperationFailed(VerificationFailed)` + `UpdateRolledBack` and forces a rollback via `Update.rollBack()` + restart when a previous image exists. `verifyState()` reports the outcome (`None` / `Pending` / `Confirmed` / `RolledBack` / `Rejected`), `pendingVersion()` the version still awaiting reboot (0 otherwise).
 
 ### Firmware verification
 

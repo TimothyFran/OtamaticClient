@@ -95,6 +95,55 @@ public:
     void setAutoRestart(bool enable) { _autoRestart = enable; }
 
     /**
+     * Outcome of the user verification callback run after a reboot that
+     * follows a remote firmware update (see onVerify()).
+     */
+    enum class VerifyResult : uint8_t {
+        /** The new firmware works: confirm it and cancel the rollback. */
+        Valid = 0,
+        /** The new firmware is broken: roll back to the previous image. */
+        Invalid = 1
+    };
+
+    /**
+     * Enable or disable the post-reboot rollback verification that applies
+     * to remote firmware updates (enabled by default).
+     */
+    void setRollbackVerification(bool enable) { _rollbackVerification = enable; }
+
+    bool rollbackVerification() const { return _rollbackVerification; }
+
+    /**
+     * Register the user self-used to confirm the latest update.
+     * Keep it short and non-blocking.
+     * 
+     * @param callback The callback to run (nullptr to remove the callback).
+     */
+    void onVerify(VerifyResult (*callback)()) { _onVerify = callback; }
+
+    /**
+     * State of the pending remote firmware verification.
+     */
+    enum class VerifyState : uint8_t {
+        /** No remote update awaiting verification. */
+        None = 0,
+        /** A remote update was downloaded, reboot pending or just booted. */
+        Pending = 1,
+        /** The last pending update was confirmed by begin(). */
+        Confirmed = 2,
+        /** The last pending update did not boot (rollback detected). */
+        RolledBack = 3,
+        /** The user callback rejected the new firmware in begin(). */
+        Rejected = 4
+    };
+
+    /** @return the verification state observed by the last begin(). */
+    VerifyState verifyState() const { return _verifyState; }
+
+    /** @return the firmware version a pending update expects, 0 when none. */
+    uint32_t pendingVersion() const { return _verifyState == VerifyState::Pending ? _pendingVersion : 0; }
+
+    /**
      * Override the update server. @param host Hostname or IP (copied internally).
      * @return false if host is null or empty.
      */
@@ -153,6 +202,10 @@ private:
     char _publicKey[512] = {0};
     bool _autoUpdate = true;
     bool _autoRestart = true;
+    bool _rollbackVerification = true;
+    VerifyState _verifyState = VerifyState::None;
+    uint32_t _pendingVersion = 0;
+    VerifyResult (*_onVerify)() = nullptr;
 
     bool _requireSignature = false;
 
@@ -172,6 +225,12 @@ private:
     std::atomic<bool> _transportBusy{false};
 
     static constexpr uint32_t kUpdateStallTimeout = 10000;
+
+    uint32_t loadPendingVersion() const;
+    void storePendingVersion(uint32_t version);
+    void clearPendingVersion();
+
+    void verifyPendingUpdate();
 
     void requestCheckNowInternal(bool restartCounter);
 
@@ -194,7 +253,7 @@ private:
 
     bool writeUpdateChunk(const uint8_t* data, size_t len);
 
-    bool finalizeUpdate(bool checkIntegrity, bool checkSignature);
+    bool finalizeUpdate(bool checkIntegrity, bool checkSignature, uint32_t pendingVersion = 0);
 
     void abortUpdate(OtamaticClientError reason);
 

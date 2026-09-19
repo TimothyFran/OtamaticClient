@@ -6,6 +6,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <StreamUtils.h>
+#include <Preferences.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/base64.h>
@@ -19,6 +20,11 @@ struct OtamaticClient::UpdateState {
     size_t written = 0;
     uint32_t lastProgress = 0;
 };
+
+namespace {
+constexpr char kVerifyNamespace[] = "otamatic";
+constexpr char kVerifyKey[] = "pending_fw";
+}  // namespace
 
 OtamaticClient::~OtamaticClient() {
     delete _updateState;
@@ -55,8 +61,113 @@ bool OtamaticClient::begin(uint32_t currentFwVersion, const char* serviceKey) {
 
     _client->setTimeout(1000);
 
+    verifyPendingUpdate();
+
     log_i("Initialized, firmware version: %lu", (unsigned long)_firmwareVersion);
     return true;
+}
+
+uint32_t OtamaticClient::loadPendingVersion() const {
+    Preferences prefs;
+    // NOTE: open READ-WRITE (not read-only) on purpose. With read-only,
+    // nvs_open returns NOT_FOUND on fresh devices where the "otamatic"
+    // namespace was never created, and Preferences.cpp logs:
+    //   [E][Preferences.cpp:47] begin(): nvs_open failed: NOT_FOUND
+    // Opening READ-WRITE creates the namespace on first boot, so the error
+    // appears at most once and never again.
+    if (!prefs.begin(kVerifyNamespace, false)) {
+        log_w("Cannot open NVS namespace '%s', skipping rollback verification", kVerifyNamespace);
+        return 0;
+    }
+    const uint32_t pending = prefs.getUInt(kVerifyKey, 0);
+    prefs.end();
+    log_d("Loaded pending firmware version: %lu", (unsigned long)pending);
+    return pending;
+}
+
+void OtamaticClient::storePendingVersion(uint32_t version) {
+    Preferences prefs;
+    if (!prefs.begin(kVerifyNamespace, false)) {
+        log_w("Cannot open NVS namespace '%s' for writing, rollback verification disabled for this update", kVerifyNamespace);
+        return;
+    }
+    if (prefs.putUInt(kVerifyKey, version) == 0) {
+        log_w("Cannot persist the pending firmware version, rollback verification disabled for this update");
+    } else {
+        log_i("Stored pending firmware version %lu, awaiting verification on next boot", (unsigned long)version);
+    }
+    prefs.end();
+}
+
+void OtamaticClient::clearPendingVersion() {
+    Preferences prefs;
+    if (!prefs.begin(kVerifyNamespace, false)) {
+        log_w("Cannot open NVS namespace '%s', pending firmware version kept", kVerifyNamespace);
+        return;
+    }
+    prefs.remove(kVerifyKey);
+    prefs.end();
+}
+
+void OtamaticClient::verifyPendingUpdate() {
+    const uint32_t pending = loadPendingVersion();
+    if (pending == 0) {
+        _verifyState = VerifyState::None;
+        _pendingVersion = 0;
+        return;
+    }
+
+    if (!_rollbackVerification) {
+        log_i("Pending firmware version %lu found but rollback verification is disabled, clearing it",
+              (unsigned long)pending);
+        clearPendingVersion();
+        _verifyState = VerifyState::None;
+        _pendingVersion = 0;
+        return;
+    }
+
+    if (_firmwareVersion != pending) {
+        log_w("Firmware rollback detected (running: %lu, expected: %lu), clearing the pending update",
+              (unsigned long)_firmwareVersion, (unsigned long)pending);
+        clearPendingVersion();
+        _verifyState = VerifyState::RolledBack;
+        _pendingVersion = 0;
+        transmitEvent(OtamaticClientEvent::UpdateRolledBack);
+        if (Update.canRollBack()) {
+            log_w("Rolling back to the previous firmware");
+            Update.rollBack();
+            ESP.restart();
+        } else {
+            log_w("No previous firmware available for rollback");
+        }
+        return;
+    }
+
+    if (_onVerify != nullptr) {
+        log_i("Running the user verification callback for firmware version %lu", (unsigned long)pending);
+        const VerifyResult result = _onVerify();
+        if (result == VerifyResult::Invalid) {
+            log_w("User verification rejected firmware version %lu, rolling back", (unsigned long)pending);
+            clearPendingVersion();
+            _verifyState = VerifyState::Rejected;
+            _pendingVersion = 0;
+            transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::VerificationFailed);
+            transmitEvent(OtamaticClientEvent::UpdateRolledBack);
+            if (Update.canRollBack()) {
+                Update.rollBack();
+                ESP.restart();
+            } else {
+                log_e("Rollback requested but no previous firmware is available");
+            }
+            return;
+        }
+    }
+
+    log_i("Firmware version %lu verified, rollback cancelled", (unsigned long)pending);
+    clearPendingVersion();
+    _verifyState = VerifyState::Confirmed;
+    _pendingVersion = 0;
+    transmitEvent(OtamaticClientEvent::UpdateConfirmed);
 }
 
 void OtamaticClient::buildBearerToken(char* buffer, size_t bufferSize) const {
@@ -417,8 +528,12 @@ bool OtamaticClient::applyUpdateInternal() {
         return false;
     }
 
-    const bool success = finalizeUpdate(true, checkSignature);
-    if (success && _autoRestart) ESP.restart();
+    const uint32_t downloaded = _checkData.version;
+    const bool success = finalizeUpdate(true, checkSignature, downloaded);
+    if (success) {
+        _checkData.clear();
+        if (_autoRestart) ESP.restart();
+    }
 
     return success;
 }
@@ -506,7 +621,7 @@ bool OtamaticClient::writeUpdateChunk(const uint8_t* data, size_t len) {
     return true;
 }
 
-bool OtamaticClient::finalizeUpdate(bool checkIntegrity, bool checkSignature) {
+bool OtamaticClient::finalizeUpdate(bool checkIntegrity, bool checkSignature, uint32_t pendingVersion) {
     if (_updateState == nullptr) {
         log_e("%s (no update in progress)",
               reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::WriteFailed)));
@@ -562,6 +677,11 @@ bool OtamaticClient::finalizeUpdate(bool checkIntegrity, bool checkSignature) {
         log_e("%s (Update.end error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::EndFailed)), Update.getError());
     } else {
         log_i("Update completed, %u bytes written", (unsigned)_updateState->written);
+        if (pendingVersion != 0 && _rollbackVerification) {
+            storePendingVersion(pendingVersion);
+            _verifyState = VerifyState::Pending;
+            _pendingVersion = pendingVersion;
+        }
     }
     transmitEvent(success ? OtamaticClientEvent::UpdateCompleted : OtamaticClientEvent::OperationFailed,
                   success ? (uint8_t)OtamaticClientError::None : (uint8_t)OtamaticClientError::EndFailed);
@@ -670,6 +790,8 @@ const __FlashStringHelper* OtamaticClient::getEventName(OtamaticClientEvent even
         case OtamaticClientEvent::UpdateStarted: return F("Update started");
         case OtamaticClientEvent::UpdateProgress: return F("Update progress");
         case OtamaticClientEvent::UpdateCompleted: return F("Update completed");
+        case OtamaticClientEvent::UpdateConfirmed: return F("Update confirmed");
+        case OtamaticClientEvent::UpdateRolledBack: return F("Update rolled back");
         case OtamaticClientEvent::OperationFailed: return F("Operation failed");
         default: return F("Unknown event");
     }
@@ -690,6 +812,7 @@ const __FlashStringHelper* OtamaticClient::getErrorName(OtamaticClientError erro
         case OtamaticClientError::SignatureFailed: return F("Signature check failed");
         case OtamaticClientError::ConfigInvalid: return F("Invalid configuration");
         case OtamaticClientError::InvalidImage: return F("Invalid image");
+        case OtamaticClientError::VerificationFailed: return F("Verification failed");
         default: return F("Unknown error");
     }
 }

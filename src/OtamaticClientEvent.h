@@ -12,6 +12,8 @@ enum class OtamaticClientEvent {
     UpdateStarted,      // Writing of the new image has started (firmware or filesystem)
     UpdateProgress,     // Image write progress
     UpdateCompleted,    // Update completed (reboot imminent with setAutoRestart(true))
+    UpdateConfirmed,    // A pending remote firmware update passed verification after reboot
+    UpdateRolledBack,   // A pending remote firmware update failed verification (rollback requested)
     OperationFailed     // Operation failed (check, update or configuration)
 };
 
@@ -31,7 +33,8 @@ enum class OtamaticClientError : uint8_t {
     IntegrityFailed,    // The integrity hash of the downloaded firmware does not match
     SignatureFailed,    // The signature of the downloaded firmware does not match
     ConfigInvalid,      // Invalid configuration (e.g. service key length)
-    InvalidImage        // The uploaded image does not match the selected target
+    InvalidImage,       // The uploaded image does not match the selected target
+    VerificationFailed  // The post-reboot verification callback rejected the new firmware
 };
 
 /**
