@@ -69,11 +69,16 @@ void OtamaticClient::buildBearerToken(char* buffer, size_t bufferSize) const {
 void OtamaticClient::loop() {
     if (_portal != nullptr) _portal->handleLoop();
 
-    if (! isPortalActive() && millis() - _lastCheck >= _checkInterval) requestCheckNow();
+    // Deferred only while an update is writing to flash: a portal that is
+    // merely active does not stop the checks.
+    if (! _busy.load() && ! _transportBusy.load() &&
+        millis() - _lastCheck >= _checkInterval) {
+        requestCheckNow();
+    }
 }
 
 bool OtamaticClient::startPortal(uint32_t timeoutMs) {
-    if (_busy) {
+    if (_busy.load()) {
         log_w("Check or update in progress, portal start ignored");
         return false;
     }
@@ -162,13 +167,18 @@ void OtamaticClient::requestCheckNow(bool restartCounter) {
         log_e("No client bound, call setClient() first");
         return;
     }
-    if (_busy) {
+    // Do not start a new transport operation while an update is writing to
+    // flash: the portal upload (if any) is left to finish undisturbed.
+    if (_busy.load()) {
+        log_w("Update in progress, check deferred");
+        return;
+    }
+    if (_transportBusy.exchange(true)) {
         log_w("Check already in progress, ignoring re-entrant call");
         return;
     }
-    _busy = true;
     requestCheckNowInternal(restartCounter);
-    _busy = false;
+    _transportBusy = false;
 }
 
 void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
@@ -268,7 +278,15 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
 
     if (!_autoUpdate) return;
 
+    // A browser upload may have claimed the pipeline while this check was in
+    // flight: the portal wins and the update stays pending for the next check
+    // (or for a manual applyUpdate()).
+    if (_busy.exchange(true)) {
+        log_w("Upload in progress on the portal, skipping the automatic download");
+        return;
+    }
     applyUpdateInternal();
+    _busy = false;
 }
 
 bool OtamaticClient::applyUpdate() {
@@ -276,13 +294,20 @@ bool OtamaticClient::applyUpdate() {
         log_e("No client bound, call setClient() first");
         return false;
     }
-    if (_busy) {
+    // The transport is shared with the version check: never from inside an
+    // event callback fired by a running check.
+    if (_transportBusy.exchange(true)) {
         log_w("Check or update already in progress, ignoring re-entrant call");
         return false;
     }
-    _busy = true;
+    if (_busy.exchange(true)) {
+        log_w("Update already in progress (remote or portal), ignoring re-entrant call");
+        _transportBusy = false;
+        return false;
+    }
     bool result = applyUpdateInternal();
     _busy = false;
+    _transportBusy = false;
     return result;
 }
 

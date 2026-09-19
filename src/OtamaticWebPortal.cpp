@@ -222,16 +222,21 @@ void OtamaticWebPortal::handleUpload(AsyncWebServerRequest* request, const Strin
     if (index == 0) {
         bool rejected = false;
         withState([&](SharedState& s) {
-            if (_client._busy || s.state != UploadState::Idle) {
+            if (s.state != UploadState::Idle) {
                 rejected = true;
                 return;
             }
+
+            if (_client._busy.exchange(true)) {
+                rejected = true;
+                return;
+            }
+
             s.state = UploadState::InProgress;
             s.lastChunkAt = millis();
             s.bytesWritten = 0;
             s.succeeded = false;
             s.abortOwner = AbortOwner::None;
-            _client._busy = true;
         });
         if (rejected) {
             log_w("Upload rejected, another update is in progress");

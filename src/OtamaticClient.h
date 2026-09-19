@@ -3,13 +3,14 @@
 #include <Arduino.h>
 #include <Update.h>
 #include <Client.h>
+#include <atomic>
 #include "OtamaticClientEvent.h"
 #include "OtamaticVersionCheckData.h"
 
 class OtamaticWebPortal;
 
 // Version of the OtamaticClient library itself.
-#define OTAMATIC_CLIENT_VERSION "0.3.0"
+#define OTAMATIC_CLIENT_VERSION "0.3.1"
 
 class OtamaticClient {
 public:
@@ -92,7 +93,10 @@ public:
 
     /**
      * Start the local upload portal (browser firmware upload).
-     * Non-blocking: service it via loop(). Checks are suspended while active.
+     * Non-blocking: service it via loop(). It may stay active in the
+     * background: version checks keep running and never block a browser
+     * upload, while the firmware write itself is exclusive (a remote download
+     * rejects uploads and vice versa).
      * Requires a SoC network interface (Wi-Fi or wired), not an external modem.
      * @param timeoutMs Inactivity timeout in ms (0 = disabled).
      */
@@ -132,8 +136,13 @@ private:
 
     OtamaticVersionCheckData _checkData;
 
-    /** Re-entrancy guard for check/update; claimed atomically by the portal. */
-    bool _busy = false;
+    /** OTA pipeline owner (remote download or portal upload): at most one
+     *  writer at a time. Claimed atomically; not held during a version check. */
+    std::atomic<bool> _busy{false};
+
+    /** Transport owner (version check or remote download): guards the shared
+     *  Client against concurrent use. The portal upload does not use it. */
+    std::atomic<bool> _transportBusy{false};
 
     static constexpr uint32_t kUpdateStallTimeout = 10000;
 

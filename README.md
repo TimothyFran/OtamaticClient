@@ -112,7 +112,11 @@ ota.startPortal(5 * 60 * 1000UL);  // timeout in ms (0 to disable it)
   any time, `isPortalActive()` reports the state.
 - All the update events are emitted as usual, but integrity and signature
   verification are skipped (the binary comes from the user, not the server).
-- Periodic version checks are suspended while the portal is active.
+- The portal may stay active in the background: version checks keep running and
+  do not block it. A browser upload started during a check is accepted and takes
+  over the write; the automatic download is then skipped. The firmware write
+  itself stays exclusive (a browser upload is rejected during a remote download
+  and vice versa).
 - Works on Wi-Fi (station/soft-AP) and wired interfaces; not with an external
   modem (e.g. TinyGSM).
 - With `setAutoRestart(true)` (default) the device reboots shortly after a
