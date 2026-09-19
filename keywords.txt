@@ -6,6 +6,7 @@ OtamaticClient	KEYWORD1
 OtamaticClientEvent	KEYWORD1
 OtamaticClientEventData	KEYWORD1
 OtamaticClientError	KEYWORD1
+OtamaticUpdateTarget	KEYWORD1
 OtamaticVersionCheckData	KEYWORD1
 
 begin	KEYWORD2

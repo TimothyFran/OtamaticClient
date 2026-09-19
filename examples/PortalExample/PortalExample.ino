@@ -1,10 +1,17 @@
 /*
- * OtamaticClient - Basic Wi-Fi example
+ * OtamaticClient - Local update portal example
  *
  * Checks the Otamatic server for a new firmware version and applies it
- * automatically. The library works with any Arduino `Client`
- * implementation: switch WiFiClient to WiFiClientSecure for HTTPS, or to
- * EthernetClient / TinyGsmClient for Ethernet / GSM transports.
+ * automatically. When the device cannot join the configured Wi-Fi network within
+ * 5 seconds it falls back to a soft-AP running the local update portal: connect
+ * to the "Otamatic AP" network and open http://192.168.4.1/ to write a firmware
+ * .bin to the OTA slot or a filesystem image (LittleFS/SPIFFS) to the filesystem
+ * partition; the device restarts as soon as the write completes. A filesystem
+ * image requires a spiffs/littlefs partition in the partition table.
+ *
+ * The library works with any Arduino `Client` implementation: switch WiFiClient
+ * to WiFiClientSecure for HTTPS, or to EthernetClient / TinyGsmClient for
+ * Ethernet / GSM transports.
  */
 #include <Arduino.h>
 #include <OtamaticClient.h>

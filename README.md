@@ -43,8 +43,7 @@ or install it from the PlatformIO Home → **Libraries** panel by searching for
 
 ## Usage
 
-OtamaticClient is transport agnostic: it implements plain HTTP/1.1 on top of
-any `Client` implementation, so it works over Wi-Fi, Ethernet, GSM, in both HTTP and HTTPS (depending on the client class you pass in).
+OtamaticClient is transport agnostic: it implements plain HTTP/1.1 on top of any `Client` implementation, so it works over Wi-Fi, Ethernet, GSM, in both HTTP and HTTPS (depending on the client class you pass in).
 The transport is attached with `setClient()` and can be re-bound at runtime (e.g. after a network change) without losing any configuration.
 
 ```cpp
@@ -82,26 +81,19 @@ A complete example is available in [examples/AdvancedExample](examples/AdvancedE
 
 ### Configuration
 
-- `setClient(client)` / `getClient()`: bind (or read) the transport. Must be
-  called before `begin()`.
-- `begin(firmwareVersion, serviceKey)`: initialize the library; returns `false`
-  (with a `ConfigInvalid` error) if the transport is missing or the key is invalid.
+- `setClient(client)` / `getClient()`: bind (or read) the transport. Must be called before `begin()`.
+- `begin(firmwareVersion, serviceKey)`: initialize the library; returns `false` (with a `ConfigInvalid` error) if the transport is missing or the key is invalid.
 - `setCheckInterval(interval)`: milliseconds between automatic checks (default: 5 min).
 - `requestCheckNow(restartCounter)`: force an immediate check.
 - `setDeviceId(id)` / `getDeviceId()`: device ID (default: ESP32 station MAC).
-- `setAutoUpdate(enable)`: disable to only report updates via the
-  `UpdateAvailable` event and apply them manually with `applyUpdate()`.
-- `setAutoRestart(enable)`: disable to reboot manually with `ESP.restart()`
-  when `UpdateCompleted` is received.
-- `setPublicKey(key)`: ECDSA public key for signature verification
-  (see "Firmware verification").
-- `firmwareVersion()` / `getCheckData()` / `hasUpdateAvailable()`: inspect the
-  running version and the result of the last check (not persisted across reboots).
+- `setAutoUpdate(enable)`: disable to only report updates via the `UpdateAvailable` event and apply them manually with `applyUpdate()`.
+- `setAutoRestart(enable)`: disable to reboot manually with `ESP.restart()` when `UpdateCompleted` is received.
+- `setPublicKey(key)`: ECDSA public key for signature verification (see "Firmware verification").
+- `firmwareVersion()` / `getCheckData()` / `hasUpdateAvailable()`: inspect the running version and the result of the last check (not persisted across reboots).
 
 ### Local update portal
 
-An alternative update transport: a minimal web page (no filesystem needed)
-that lets you upload a firmware `.bin` directly from a browser.
+An alternative update transport: a minimal web page (no filesystem needed) that lets you upload an image directly from a browser: an application image (firmware, written to the next OTA partition) or a filesystem image such as LittleFS/SPIFFS (written to the filesystem partition).
 
 ```cpp
 ota.startPortal(5 * 60 * 1000UL);  // timeout in ms (0 to disable it)
@@ -110,26 +102,31 @@ ota.startPortal(5 * 60 * 1000UL);  // timeout in ms (0 to disable it)
 ota.startPortal(5 * 60 * 1000UL, "admin", "secret");
 ```
 
+The page asks what you are uploading (`Auto` / `Firmware` / Filesystem`). On `Auto` the device recognizes the image from its first bytes, exactly like the page previews it in the browser:
+
+| First bytes | Target |
+| ----------- | ------ |
+| `0xE9` (`ESP_IMAGE_HEADER_MAGIC`, ESP32 application image) | Firmware, OTA partition |
+| `littlefs` at offset 8 (LittleFS superblock) | Filesystem partition |
+| anything else (SPIFFS and FAT images have no marker) | Refused on `Auto`; written to the filesystem partition when selected explicitly |
+
+An image that contradicts the selected type is refused *before* any flash write, and the reason is returned in the response body (HTTP 503), so the page shows the same explanation it applies locally.
+
 - Non-blocking: call `ota.loop()` as usual to service it.
-- The portal stops itself after a successful upload; `stopPortal()` stops it at
-  any time, `isPortalActive()` reports the state.
-- All the update events are emitted as usual, but integrity and signature
-  verification are skipped (the binary comes from the user, not the server).
-- The portal may stay active in the background: version checks keep running and
-  do not block it. A browser upload started during a check is accepted and takes
-  over the write; the automatic download is then skipped. The firmware write
-  itself stays exclusive (a browser upload is rejected during a remote download
-  and vice versa).
-- Works on Wi-Fi (station/soft-AP) and wired interfaces; not with an external
-  modem (e.g. TinyGSM).
-- With `setAutoRestart(true)` (default) the device reboots shortly after a
-  successful upload.
+- The portal stops itself after a successful upload; `stopPortal()` stops it at any time, `isPortalActive()` reports the state.
+- All the update events are emitted as usual, but integrity and signature  verification are skipped (the binary comes from the user, not the server).
+- The portal may stay active in the background: version checks keep running and do not block it. A browser upload started during a check is accepted and takes over the write; the automatic download is then skipped. The flash write itself stays exclusive (a browser upload is rejected during a remote download and vice versa).
+- Works on Wi-Fi (station/soft-AP) and wired interfaces; not with an external modem (e.g. TinyGSM).
+- With `setAutoRestart(true)` (default) the device reboots shortly after a successful upload, firmware or filesystem alike: the freshly written filesystem is mounted on the next boot.
+- A filesystem image larger than the filesystem partition is refused; the page reports the partition size from `/api/info` before uploading.
 - The event handler may run while the upload is in progress: do not block inside it.
+
+The page is embedded gzipped in `src/PortalPage.h`: after editing
+`extras/index.html`, regenerate `src/PortalPage.h` before rebuilding.
 
 ### Events
 
-`onEvent(callback)` registers a handler invoked with `OtamaticClientEventData`
-(event type plus a `uint8_t` payload):
+`onEvent(callback)` registers a handler invoked with `OtamaticClientEventData` (event type plus a `uint8_t` payload):
 
 | Event | Payload | Meaning |
 | ----- | ------- | ------- |
@@ -149,14 +146,15 @@ Error codes reported with `OperationFailed`:
 | `InvalidCheckData` | No valid version check result when applying the update |
 | `ConnectionFailed` | Could not establish the connection to the server |
 | `HttpFailed` | The server answered with an unexpected HTTP status |
-| `InvalidFirmware` | The firmware binary size is invalid |
-| `BeginFailed` | Could not reserve the OTA partition (no space, partition issue...) |
+| `InvalidFirmware` | The image size is invalid (zero, or larger than the target partition) |
+| `BeginFailed` | Could not reserve the update partition (no space, missing partition...) |
 | `DownloadFailed` | Download stalled or connection dropped |
-| `WriteFailed` | Error while writing the firmware into the OTA partition |
+| `WriteFailed` | Error while writing the image into the flash partition |
 | `EndFailed` | Final image verification failed |
 | `IntegrityFailed` | The integrity hash of the downloaded firmware does not match |
 | `SignatureFailed` | The signature of the downloaded firmware does not match |
 | `ConfigInvalid` | Invalid configuration (e.g. `begin()` called with an invalid service key, or before `setClient()`) |
+| `InvalidImage` | The uploaded image does not match the selected target (refused before any flash write) |
 
 ### Firmware verification
 
@@ -169,6 +167,7 @@ The client always verifies the SHA-256 integrity hash of the downloaded firmware
 | [WiFiBasic](examples/WiFiBasic/WiFiBasic.ino) | Basic Wi-Fi setup with automatic check and update |
 | [SignatureExample](examples/SignatureExample/SignatureExample.ino) | Adds firmware signature verification with a public key |
 | [AdvancedExample](examples/AdvancedExample/AdvancedExample.ino) | Signature verification with manual update and restart control via events |
+| [PortalExample](examples/PortalExample/PortalExample.ino) | Wi-Fi with a fallback local update portal (firmware and filesystem images) |
 
 ### Transport notes
 

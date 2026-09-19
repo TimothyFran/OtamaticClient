@@ -2,16 +2,20 @@
 
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
+#include <stdarg.h>
 #include <type_traits>
 #include "OtamaticClientEvent.h"
+#include "OtamaticUpdateTarget.h"
 
 class OtamaticClient;
 
 /**
- * Local firmware upload portal. Serves a page from flash (no filesystem)
- * to upload a firmware binary from a browser.
- * Integrity and signature checks are skipped; update events are emitted
- * as usual. Managed through OtamaticClient::startPortal()/stopPortal().
+ * Local update portal. Serves a page from flash (no filesystem) to write an
+ * image to this device from a browser: an application image (firmware, written
+ * to the next OTA partition) or a filesystem image such as LittleFS/SPIFFS
+ * (written to the filesystem partition). Integrity and signature checks are
+ * skipped; update events are emitted as usual.
+ * Managed through OtamaticClient::startPortal()/stopPortal().
  */
 class OtamaticWebPortal {
 public:
@@ -56,6 +60,9 @@ private:
     /** Owner of a pending abort. */
     enum class AbortOwner : uint8_t { None, Loop, Upload };
 
+    /** Longest failure message reported to the browser. */
+    static constexpr size_t kUploadErrorMaxLen = 96;
+
     /** State shared between the web-server and loop tasks (access via withState()). */
     struct SharedState {
         UploadState state = UploadState::Idle;
@@ -64,6 +71,10 @@ private:
         AbortOwner abortOwner = AbortOwner::None;
         /** Outcome of finalizeUpdate(), valid when state == Done. */
         bool succeeded = false;
+        /** Partition the upload writes to, valid from the first chunk. */
+        OtamaticUpdateTarget target = OtamaticUpdateTarget::Firmware;
+        /** Failure message reported to the browser (empty = none). */
+        char error[kUploadErrorMaxLen] = {0};
         uint32_t lastChunkAt = 0;
         /** Upload completion time, valid when state == Done. */
         uint32_t doneAt = 0;
@@ -89,6 +100,15 @@ private:
     }
 
     void claimPendingAbort(OtamaticClientError reason);
+
+    /** Store the failure message reported to the browser (empty string clears it). */
+    void setUploadError(const char* format, ...) __attribute__((format(printf, 2, 3)));
+
+    /**
+     * Refuse an upload before it starts: record and log the reason (shown to the
+     * browser by the POST response handler) and emit OperationFailed/InvalidImage.
+     */
+    void rejectUpload(const char* format, ...) __attribute__((format(printf, 2, 3)));
 
     OtamaticClient& _client;
     AsyncWebServer* _server = nullptr;

@@ -9,9 +9,9 @@ enum class OtamaticClientEvent {
     CheckingForUpdate,  // Start of a version check cycle
     UpdateAvailable,    // A new firmware version was found
     UpdateNotNeeded,    // No update available
-    UpdateStarted,      // Writing of the new firmware has started
-    UpdateProgress,     // Firmware write progress
-    UpdateCompleted,    // Update completed (reboot imminent)
+    UpdateStarted,      // Writing of the new image has started (firmware or filesystem)
+    UpdateProgress,     // Image write progress
+    UpdateCompleted,    // Update completed (reboot imminent with setAutoRestart(true))
     OperationFailed     // Operation failed (check, update or configuration)
 };
 
@@ -23,14 +23,15 @@ enum class OtamaticClientError : uint8_t {
     InvalidCheckData,   // No valid version check result when applying the update
     ConnectionFailed,   // Could not establish the connection to the server
     HttpFailed,         // The server answered with an unexpected HTTP status
-    InvalidFirmware,    // The firmware binary size is invalid
-    BeginFailed,        // Could not reserve the OTA partition (no space, partition issue...)
+    InvalidFirmware,    // The image size is invalid (zero, or larger than the target partition)
+    BeginFailed,        // Could not reserve the update partition (no space, missing partition...)
     DownloadFailed,     // Download stalled or connection dropped
-    WriteFailed,        // Error while writing the firmware into the OTA partition
+    WriteFailed,        // Error while writing the image into the flash partition
     EndFailed,          // Final image verification failed
     IntegrityFailed,    // The integrity hash of the downloaded firmware does not match
     SignatureFailed,    // The signature of the downloaded firmware does not match
-    ConfigInvalid       // Invalid configuration (e.g. service key length)
+    ConfigInvalid,      // Invalid configuration (e.g. service key length)
+    InvalidImage        // The uploaded image does not match the selected target
 };
 
 /**

@@ -10,7 +10,6 @@
       --tx: #1c2430;
       --dm: #5c6a7d;
       --bl: #3273dc;
-      --tl: #00a58c;
       --ok: #0ca678;
       --fl: #d64545;
       --gr: linear-gradient(90deg, #3273dc, #00d1b2);
@@ -38,7 +37,7 @@
       gap: 8px;
     }
     .dv[hidden] { display: none; }
-    .dv-t {
+    .eb {
       margin: 0;
       font: 700 10.5px ui-monospace, Consolas, monospace;
       letter-spacing: 0.12em;
@@ -65,13 +64,6 @@
     }
     h1 { font-size: 22px; margin: 0 0 6px; }
     .sub { margin: 0 0 22px; color: var(--dm); font-size: 14px; }
-    .sub code {
-      font: 600 12.5px ui-monospace, Consolas, monospace;
-      color: var(--bl);
-      background: #e8eefb;
-      padding: 1px 5px;
-      border-radius: 5px;
-    }
     .sel {
       position: relative;
       display: flex;
@@ -154,6 +146,33 @@
     .ok h1 { color: var(--ok); }
     .er h1 { color: var(--fl); }
     .sel.dr { border-color: var(--bl); background: #f6f9ff; }
+    /* Image type: the three states stay visible, the choice picks the destination. */
+    .tg { margin: 0 0 14px; }
+    .tg .eb { margin-bottom: 7px; }
+    .tg-o {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      background: #fff;
+      border: 1px solid var(--bd);
+      border-radius: 10px;
+    }
+    .tg-i { flex: 1 1 0; position: relative; display: block; cursor: pointer; }
+    .tg-i input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .tg-i span {
+      display: block;
+      padding: 8px 4px;
+      border-radius: 7px;
+      text-align: center;
+      font: 600 11.5px ui-monospace, Consolas, monospace;
+      color: var(--dm);
+      transition: background 0.15s, color 0.15s;
+    }
+    .tg-i:hover span { color: var(--tx); }
+    .tg-i input:checked + span { background: #e8eefb; color: var(--bl); }
+    .tg-i input:focus-visible + span { outline: 2px solid var(--bl); outline-offset: 1px; }
+    .sel input:focus-visible ~ .b2 { outline: 2px solid var(--bl); outline-offset: 2px; }
+    button:focus-visible { outline: 2px solid var(--tx); outline-offset: 2px; }
     @media (prefers-reduced-motion: reduce) { * { transition: none; } }
   </style>
 </head>
@@ -184,12 +203,20 @@
       </svg>
     </header>
     <section id="v1">
-      <h1>Firmware update</h1>
-      <p class="sub">Select a <code>.bin</code> firmware and write it to this device.</p>
+      <h1>Write to this device</h1>
+      <p class="sub" id="sub">Pick a firmware or filesystem image: its header decides where it goes.</p>
       <form id="m" method="POST" action="/update" enctype="multipart/form-data">
         <input type="hidden" name="filesize" id="s" value="">
+        <div class="tg" role="radiogroup" aria-labelledby="tg-t">
+          <p class="eb" id="tg-t">Image type</p>
+          <div class="tg-o">
+            <label class="tg-i"><input type="radio" name="target" value="auto" checked><span>Auto</span></label>
+            <label class="tg-i"><input type="radio" name="target" value="firmware"><span>Firmware</span></label>
+            <label class="tg-i"><input type="radio" name="target" value="filesystem"><span>Filesystem</span></label>
+          </div>
+        </div>
         <label class="sel">
-          <input type="file" id="f" name="update" accept=".bin" required>
+          <input type="file" id="f" name="update" accept=".bin,.littlefs,.spiffs" required>
           <svg class="ci" viewBox="0 0 24 18">
             <rect x="5.5" y="3.5" width="13" height="11" rx="1.5"></rect>
             <path d="M2 6.5h3.5M2 11.5h3.5M18.5 6.5H22M18.5 11.5H22M9.5 3.5V1M14.5 3.5V1M9.5 14.5V17M14.5 14.5V17"></path>
@@ -198,17 +225,18 @@
           <span class="b2">Browse files</span>
         </label>
         <button id="b" type="submit">Write to device</button>
-        <p class="nt nt-warn">Local uploads skip signature checks: flash only firmware you trust.</p>
+        <p class="nt nt-warn" id="w">Local uploads skip signature checks: flash only firmware you trust.</p>
       </form>
     </section>
     <section class="dv" id="dv" hidden aria-live="polite">
-      <p class="dv-t">Device</p>
+      <p class="eb">Device</p>
       <div class="dv-r"><span>Device ID</span><span id="di">–</span></div>
       <div class="dv-r"><span>Firmware Version</span><span id="fv">–</span></div>
       <div class="dv-r" id="vn-r" hidden><span>Version Name</span><span id="vn">–</span></div>
+      <div class="dv-r" id="fsp-r" hidden><span>Filesystem</span><span id="fsp">–</span></div>
     </section>
     <section id="v2" hidden>
-      <h1>Writing firmware</h1>
+      <h1 id="wt">Writing image</h1>
       <p class="sub" id="n"></p>
       <div class="pb"><i id="c"></i></div>
       <p class="pc"><b id="p">0%</b><span id="d">0 B / 0 B</span></p>
@@ -217,7 +245,7 @@
     <section id="v3" hidden aria-live="polite">
       <h1 id="rt"></h1>
       <p class="sub" id="rb"></p>
-      <button id="a" type="button">Flash another firmware</button>
+      <button id="a" type="button">Write another image</button>
     </section>
     <footer class="ft">
       <a href="https://github.com/TimothyFran/OtamaticClient">OtamaticClient on GitHub</a>
@@ -233,6 +261,8 @@
       var submitButton = $("b");
       var fileLabel = $("e");
       var dropZone = document.querySelector(".sel");
+      var targetRadios = document.querySelectorAll('input[name="target"]');
+      var writingTitle = $("wt");
       function loadDeviceInfo() {
         var card = $("dv");
         function show(id, value) {
@@ -241,8 +271,7 @@
           card.hidden = false;
           return true;
         }
-        
-        if (!window.fetch) return;
+
         fetch("/api/info", { headers: { Accept: "application/json" } }).then(function (r) {
           if (!r.ok) return null;
           return r.json();
@@ -251,6 +280,9 @@
           show("di", info.deviceId);
           show("fv", info.firmwareVersion);
           if (show("vn", info.versionName)) $("vn-r").hidden = false;
+          if (typeof info.filesystemPartitionSize === "number" && info.filesystemPartitionSize > 0) {
+            if (show("fsp", formatSize(info.filesystemPartitionSize))) $("fsp-r").hidden = false;
+          }
           if (typeof info.portalTitle === "string" && info.portalTitle !== "") {
             document.title = info.portalTitle;
             var h1 = document.querySelector("#v1 h1");
@@ -275,10 +307,16 @@
       function syncFileState() {
         var file = fileInput.files[0];
         sizeInput.value = file ? file.size : "";
-        submitButton.disabled = !file;
         fileLabel.textContent = file
           ? file.name + " \u00b7 " + formatSize(file.size)
           : "No file chosen";
+        submitButton.disabled = !file;
+      }
+      function selectedTarget() {
+        for (var i = 0; i < targetRadios.length; i++) {
+          if (targetRadios[i].checked) return targetRadios[i].value;
+        }
+        return "auto";
       }
       fileInput.onchange = syncFileState;
       $("a").addEventListener("click", function (ev) {
@@ -304,22 +342,21 @@
           syncFileState();
         }
       };
-      window.addEventListener("dragover", function (ev) {
-        ev.preventDefault();
-      });
-      window.addEventListener("drop", function (ev) {
-        ev.preventDefault();
-      });
       $("m").onsubmit = function (ev) {
         var file = fileInput.files[0];
-        if (!file || !window.FormData) return;
+        if (!file) return;
         ev.preventDefault();
+        var target = selectedTarget();
+        // The fields the device reads with the first chunk come before the file.
         var payload = new FormData();
         payload.append("filesize", file.size);
+        payload.append("target", target);
         payload.append("update", file, file.name);
         var xhr = new XMLHttpRequest();
         xhr.open("POST", "/update");
         showView(2);
+        writingTitle.textContent = target === "filesystem" ? "Writing filesystem"
+          : (target === "firmware" ? "Writing firmware" : "Writing image");
         $("n").textContent = file.name;
         var percentEl = $("p");
         var barEl = $("c");
@@ -335,10 +372,11 @@
         };
         xhr.onload = function () {
           var ok = xhr.status < 300;
-          $("rt").textContent = ok ? "Firmware written" : "Update failed";
-          $("rb").textContent = ok
-            ? "The device restarts now into the new firmware."
-            : (xhr.responseText || "Write failed. Check the serial log and retry.").replace(/\s+/g, " ");
+          $("rt").textContent = ok ? "Image written" : "Update failed";
+          // The device reports the outcome (and any failure reason) in the body.
+          $("rb").textContent = (xhr.responseText ||
+            (ok ? "The device restarts now." : "Write failed. Check the serial log and retry.")
+          ).replace(/\s+/g, " ");
           document.body.className = ok ? "ok" : "er";
           showView(3);
         };

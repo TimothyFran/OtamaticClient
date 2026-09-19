@@ -5,6 +5,7 @@
 #include <Client.h>
 #include <atomic>
 #include "OtamaticClientEvent.h"
+#include "OtamaticUpdateTarget.h"
 #include "OtamaticVersionCheckData.h"
 
 class OtamaticWebPortal;
@@ -116,7 +117,7 @@ public:
     void setPublicKey(const char* key);
 
     /**
-     * Start the local upload portal (browser firmware upload).
+     * Start the local update portal (browser upload of an image).
      * Requires an active SoC network interface (Wi-Fi or wired).
      * @param timeoutMs Inactivity timeout in ms (0 = no timeout).
      * @param username HTTP Basic auth username (nullptr = auth disabled).
@@ -178,6 +179,9 @@ private:
 
     uint32_t getOtaPartitionSize() const;
 
+    /** Size of the filesystem partition (LittleFS/SPIFFS, FAT as fallback), 0 if absent. */
+    uint32_t getFilesystemPartitionSize() const;
+
     void buildBearerToken(char* buffer, size_t bufferSize) const;
 
     bool verifyIntegrity(const uint8_t* integrityHash);
@@ -186,7 +190,7 @@ private:
 
     void transmitEvent(OtamaticClientEvent event, uint8_t data = 0) { if (_onEvent) _onEvent(OtamaticClientEventData(event, data)); }
 
-    bool beginUpdate(uint32_t size, uint32_t progressTotal);
+    bool beginUpdate(uint32_t size, uint32_t progressTotal, OtamaticUpdateTarget target);
 
     bool writeUpdateChunk(const uint8_t* data, size_t len);
 

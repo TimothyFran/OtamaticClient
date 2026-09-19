@@ -2,6 +2,7 @@
 #include "OtamaticWebPortal.h"
 #include <esp_mac.h>
 #include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <StreamUtils.h>
@@ -159,6 +160,17 @@ uint64_t OtamaticClient::getDeviceId() {
 
 uint32_t OtamaticClient::getOtaPartitionSize() const {
     const esp_partition_t* part = esp_ota_get_next_update_partition(nullptr);
+    return part != nullptr ? part->size : 0;
+}
+
+uint32_t OtamaticClient::getFilesystemPartitionSize() const {
+    // Same lookup performed by Update.begin(U_SPIFFS): the SPIFFS subtype holds
+    // both SPIFFS and LittleFS partitions, FAT is the fallback of the core.
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
+    if (part == nullptr) {
+        part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, nullptr);
+    }
     return part != nullptr ? part->size : 0;
 }
 
@@ -351,7 +363,7 @@ bool OtamaticClient::applyUpdateInternal() {
     ChunkDecodingStream decodedStream(http.getStream());
     Stream* stream = isChunked ? static_cast<Stream*>(&decodedStream) : http.getStreamPtr();
 
-    if (! beginUpdate(_checkData.size, _checkData.size)) {
+    if (! beginUpdate(_checkData.size, _checkData.size, OtamaticUpdateTarget::Firmware)) {
         http.end();
         return false;
     }
@@ -415,18 +427,29 @@ bool OtamaticClient::applyUpdateInternal() {
 
 // Shared OTA update pipeline (all transports).
 
-bool OtamaticClient::beginUpdate(uint32_t size, uint32_t progressTotal) {
+bool OtamaticClient::beginUpdate(uint32_t size, uint32_t progressTotal, OtamaticUpdateTarget target) {
     const bool sizeKnown = size != UPDATE_SIZE_UNKNOWN;
-    const uint32_t otaPartitionSize = getOtaPartitionSize();
-    if (sizeKnown && (size == 0 || (otaPartitionSize > 0 && size > otaPartitionSize))) {
-        log_e("%s (size: %lu, OTA partition: %lu)",
+    const bool writeFirmware = target == OtamaticUpdateTarget::Firmware;
+
+    // The application goes to the next OTA partition, a filesystem image to the
+    // SPIFFS/LittleFS partition: validate the size against the one being written.
+    const uint32_t partitionSize = writeFirmware ? getOtaPartitionSize() : getFilesystemPartitionSize();
+    if (! writeFirmware && partitionSize == 0) {
+        log_e("%s (no SPIFFS/LittleFS partition in the partition table)",
+              reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::BeginFailed)));
+        transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::BeginFailed);
+        return false;
+    }
+
+    if (sizeKnown && (size == 0 || (partitionSize > 0 && size > partitionSize))) {
+        log_e("%s (size: %lu, %s partition: %lu)",
               reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::InvalidFirmware)),
-              (unsigned long)size, (unsigned long)otaPartitionSize);
+              (unsigned long)size, writeFirmware ? "OTA" : "filesystem", (unsigned long)partitionSize);
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::InvalidFirmware);
         return false;
     }
 
-    if (! Update.begin(size, U_FLASH)) {
+    if (! Update.begin(size, writeFirmware ? U_FLASH : U_SPIFFS)) {
         log_e("%s (Update.begin error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::BeginFailed)), Update.getError());
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::BeginFailed);
         return false;
@@ -447,7 +470,7 @@ bool OtamaticClient::beginUpdate(uint32_t size, uint32_t progressTotal) {
         return false;
     }
 
-    log_i("Update started, size: %lu", (unsigned long)(sizeKnown ? size : otaPartitionSize));
+    log_i("Update started, size: %lu", (unsigned long)(sizeKnown ? size : partitionSize));
     transmitEvent(OtamaticClientEvent::UpdateStarted);
     return true;
 }
@@ -666,6 +689,7 @@ const __FlashStringHelper* OtamaticClient::getErrorName(OtamaticClientError erro
         case OtamaticClientError::IntegrityFailed: return F("Integrity check failed");
         case OtamaticClientError::SignatureFailed: return F("Signature check failed");
         case OtamaticClientError::ConfigInvalid: return F("Invalid configuration");
+        case OtamaticClientError::InvalidImage: return F("Invalid image");
         default: return F("Unknown error");
     }
 }
