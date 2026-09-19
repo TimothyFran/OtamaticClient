@@ -2,19 +2,21 @@
 
 OTA client for ESP32 with the Arduino framework.
 
-## Project structure
+Managed OTA updates through the Otamatic platform: the device periodically
+checks for a new firmware version and, when available, downloads and
+installs it automatically.
 
-```
-OtamaticClient/
-├── library.properties        # Metadata for the Arduino Library Manager
-├── library.json              # Metadata for PlatformIO
-├── LICENSE                   # Business Source License 1.1
-├── README.md
-├── keywords.txt              # Syntax highlighting for the IDE
-├── src/                      # Library source code
-├── examples/                 # Example sketches
-└── extras/                   # Additional documentation, diagrams, etc.
-```
+- Works over any Arduino `Client` (Wi-Fi, Ethernet, GSM — HTTP or HTTPS)
+- Automatic periodic checks with integrity verification (SHA-256)
+- Optional firmware signature verification (ECDSA P-256)
+- Rollback protection with post-reboot verification
+- Local update portal for manual uploads from a browser
+- Event-based API to observe the update lifecycle
+
+## Requirements
+
+- ESP32 board with the Arduino framework
+- Network connectivity (Wi-Fi, Ethernet, or GSM)
 
 ## Installation
 
@@ -60,16 +62,10 @@ WiFiClient httpClient;               // HTTP over Wi-Fi
 
 OtamaticClient ota;
 
-void onOtaEvent(OtamaticClientEventData eventData) {
-    // Handle the update lifecycle events (see "Events" below)
-}
-
 void setup() {
     // ... connect your network first ...
     ota.setClient(&httpClient);
-    ota.onEvent(onOtaEvent);
     ota.begin(FIRMWARE_VERSION, "your-otamatic-service-key");
-    ota.setCheckInterval(5 * 60 * 1000);  // check every 5 minutes
 }
 
 void loop() {
@@ -77,137 +73,17 @@ void loop() {
 }
 ```
 
-A complete example is available in [examples/AdvancedExample](examples/AdvancedExample/AdvancedExample.ino).
+That's it: the device now checks for updates every 5 minutes and applies
+them automatically (rebooting when done).
 
-### Configuration
+## Next steps
 
-- `setClient(client)` / `getClient()`: bind (or read) the transport. Must be called before `begin()`.
-- `begin(firmwareVersion, serviceKey)`: initialize the library; returns `false` (with a `ConfigInvalid` error) if the transport is missing or the key is invalid.
-- `setCheckInterval(interval)`: milliseconds between automatic checks (default: 5 min).
-- `requestCheckNow(restartCounter)`: force an immediate check.
-- `setDeviceId(id)` / `getDeviceId()`: device ID (default: ESP32 station MAC).
-- `setAutoUpdate(enable)`: disable to only report updates via the `UpdateAvailable` event and apply them manually with `applyUpdate()`.
-- `setAutoRestart(enable)`: disable to reboot manually with `ESP.restart()` when `UpdateCompleted` is received.
-- `setRollbackVerification(enable)`: post-reboot verification of remote firmware updates (enabled by default, portal uploads excluded, see "Rollback verification").
-- `onVerify(callback)`: optional user self-test run by `begin()` before a pending remote update is confirmed (see "Rollback verification").
-- `verifyState()` / `pendingVersion()`: state of the last verification performed by `begin()`.
-- `setPublicKey(key)`: ECDSA public key for signature verification (see "Firmware verification").
-- `firmwareVersion()` / `getCheckData()` / `hasUpdateAvailable()`: inspect the running version and the result of the last check (not persisted across reboots).
-
-### Local update portal
-
-An alternative update transport: a minimal web page (no filesystem needed) that lets you upload an image directly from a browser: an application image (firmware, written to the next OTA partition) or a filesystem image such as LittleFS/SPIFFS (written to the filesystem partition).
-
-```cpp
-ota.startPortal(5 * 60 * 1000UL);  // timeout in ms (0 to disable it)
-
-// Optional HTTP Basic auth (disabled by default).
-ota.startPortal(5 * 60 * 1000UL, "admin", "secret");
-```
-
-The page asks what you are uploading (`Auto` / `Firmware` / Filesystem`). On `Auto` the device recognizes the image from its first bytes, exactly like the page previews it in the browser:
-
-| First bytes | Target |
-| ----------- | ------ |
-| `0xE9` (`ESP_IMAGE_HEADER_MAGIC`, ESP32 application image) | Firmware, OTA partition |
-| `littlefs` at offset 8 (LittleFS superblock) | Filesystem partition |
-| anything else (SPIFFS and FAT images have no marker) | Refused on `Auto`; written to the filesystem partition when selected explicitly |
-
-An image that contradicts the selected type is refused *before* any flash write, and the reason is returned in the response body (HTTP 503), so the page shows the same explanation it applies locally.
-
-- Non-blocking: call `ota.loop()` as usual to service it.
-- The portal stops itself after a successful upload; `stopPortal()` stops it at any time, `isPortalActive()` reports the state.
-- All the update events are emitted as usual, but integrity and signature  verification are skipped (the binary comes from the user, not the server).
-- The portal may stay active in the background: version checks keep running and do not block it. A browser upload started during a check is accepted and takes over the write; the automatic download is then skipped. The flash write itself stays exclusive (a browser upload is rejected during a remote download and vice versa).
-- Works on Wi-Fi (station/soft-AP) and wired interfaces; not with an external modem (e.g. TinyGSM).
-- With `setAutoRestart(true)` (default) the device reboots shortly after a successful upload, firmware or filesystem alike: the freshly written filesystem is mounted on the next boot.
-- A filesystem image larger than the filesystem partition is refused; the page reports the partition size from `/api/info` before uploading.
-- The event handler may run while the upload is in progress: do not block inside it.
-
-The page is embedded gzipped in `src/PortalPage.h`: after editing
-`extras/index.html`, regenerate `src/PortalPage.h` before rebuilding.
-
-### Events
-
-`onEvent(callback)` registers a handler invoked with `OtamaticClientEventData` (event type plus a `uint8_t` payload):
-
-| Event | Payload | Meaning |
-| ----- | ------- | ------- |
-| `CheckingForUpdate` | – | A version check cycle started |
-| `UpdateAvailable` | – | A new firmware version was found |
-| `UpdateNotNeeded` | – | No update available |
-| `UpdateStarted` | – | Writing of the new firmware started |
-| `UpdateProgress` | Progress % (0-100) | Firmware write progress |
-| `UpdateCompleted` | – | Update completed (device ready to reboot) |
-| `UpdateConfirmed` | – | Pending remote update verified after reboot |
-| `UpdateRolledBack` | – | Pending remote update did not boot (rollback detected or forced) |
-| `OperationFailed` | `OtamaticClientError` code | Operation failed, see below |
-
-Error codes reported with `OperationFailed`:
-
-| Code | Meaning |
-| ---- | ------- |
-| `None` | No error (default payload) |
-| `InvalidCheckData` | No valid version check result when applying the update |
-| `ConnectionFailed` | Could not establish the connection to the server |
-| `HttpFailed` | The server answered with an unexpected HTTP status |
-| `InvalidFirmware` | The image size is invalid (zero, or larger than the target partition) |
-| `BeginFailed` | Could not reserve the update partition (no space, missing partition...) |
-| `DownloadFailed` | Download stalled or connection dropped |
-| `WriteFailed` | Error while writing the image into the flash partition |
-| `EndFailed` | Final image verification failed |
-| `IntegrityFailed` | The integrity hash of the downloaded firmware does not match |
-| `SignatureFailed` | The signature of the downloaded firmware does not match |
-| `ConfigInvalid` | Invalid configuration (e.g. `begin()` called with an invalid service key, or before `setClient()`) |
-| `InvalidImage` | The uploaded image does not match the selected target (refused before any flash write) |
-| `VerificationFailed` | The `onVerify()` callback rejected the new firmware after reboot |
-
-### Rollback verification
-
-Remote firmware updates (server downloads, not portal uploads) are verified automatically on the next boot. The flow needs no explicit check in the sketch: after a successful download the library persists the expected version in NVS; the next `begin()` compares it with the running version:
-
-- versions match → the update is confirmed (`UpdateConfirmed`), the pending record is cleared;
-- versions differ (the new image never booted, the bootloader rolled back, or the sketch was flashed over USB) → `UpdateRolledBack` is emitted, the record is cleared, and when a previous image exists the library calls `Update.rollBack()` + restart to go back to it.
-
-The check is optional but enabled by default; `setRollbackVerification(false)` must be called before `begin()` to disable it (any stale pending record is then dropped silently). Filesystem images and portal uploads never create a pending record; a portal boot only clears nothing and leaves the remote flow untouched.
-
-For application-level self-tests, register a callback **before** `begin()`:
-
-```cpp
-OtamaticClient::VerifyResult verifyFirmware() {
-    const bool sensorsOk = readSensors();
-    return sensorsOk ? OtamaticClient::VerifyResult::Valid
-                     : OtamaticClient::VerifyResult::Invalid;
-}
-
-ota.onVerify(verifyFirmware);
-```
-
-The callback runs synchronously inside `begin()`, only when the versions already match. Keep it short and non-blocking: returning `VerifyResult::Invalid` emits `OperationFailed(VerificationFailed)` + `UpdateRolledBack` and forces a rollback via `Update.rollBack()` + restart when a previous image exists. `verifyState()` reports the outcome (`None` / `Pending` / `Confirmed` / `RolledBack` / `Rejected`), `pendingVersion()` the version still awaiting reboot (0 otherwise).
-
-### Firmware verification
-
-The client always verifies the SHA-256 integrity hash of the downloaded firmware. If the server also provides a signature and you configured a public key with `setPublicKey()`, the signature is verified as well (ECDSA P-256 + SHA-256). With `setRequireSignature(true)`, updates without a signature are rejected outright.
-
-### Examples
-
-| Example | Description |
-| ------- | ----------- |
-| [WiFiBasic](examples/WiFiBasic/WiFiBasic.ino) | Basic Wi-Fi setup with automatic check and update |
-| [SignatureExample](examples/SignatureExample/SignatureExample.ino) | Adds firmware signature verification with a public key |
-| [AdvancedExample](examples/AdvancedExample/AdvancedExample.ino) | Signature verification with manual update and restart control via events |
-| [PortalExample](examples/PortalExample/PortalExample.ino) | Wi-Fi with a fallback local update portal (firmware and filesystem images) |
-
-### Transport notes
-
-| Transport | Client class | Notes |
-| --------- | ------------ | ----- |
-| Wi-Fi (HTTP) | `WiFiClient` / `NetworkClient` | Plain HTTP |
-| Wi-Fi (HTTPS) | `WiFiClientSecure` | Call `setCABundle()` (or `setInsecure()` for development only) |
-| Ethernet | `EthernetClient` | Any `Client` with TLS support works for HTTPS |
-| GSM/LTE | `TinyGsmClient` (TinyGSM) | Power on the modem before calling `ota.begin()` |
-
-You own the `Client` instance: it must stay alive for the whole sketch lifetime. If the network changes, just re-bind it with `setClient()`.
+- Browse the [examples](examples/) to go further:
+  - [WiFiBasic](examples/WiFiBasic/WiFiBasic.ino) — basic setup with event logging
+  - [SignatureExample](examples/SignatureExample/SignatureExample.ino) — firmware signature verification
+  - [AdvancedExample](examples/AdvancedExample/AdvancedExample.ino) — manual update and restart control
+  - [PortalExample](examples/PortalExample/PortalExample.ino) — local update portal for manual uploads
+- See the `src/*.h` headers and the [extras](extras/) folder for the full API documentation.
 
 ## License
 
