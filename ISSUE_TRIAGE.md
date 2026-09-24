@@ -130,3 +130,39 @@ and the hardest to verify without hardware: highest risk of silent regressions.
 
 counted"), so docs must move with the code.
 
+
+## Design review of #2 — PrepareForUpdate
+
+Verdict: **do not implement as written** (redundant, wrong emit point); optionally re-scope to the
+pre-`Update.begin()` position, which is the only genuinely missing hook.
+
+Premises of the issue, checked against the code:
+
+| Claim | Reality |
+| --- | --- |
+| "No usable window before the download" | `UpdateAvailable` is emitted at `:508`, the automatic download starts at `:519`: the callback runs *before* the connection and before `Update.begin()`. Nothing is allocated in between, and `_autoUpdate` is read at `:510`, i.e. **after** the callback, so the callback can even veto this cycle with `setAutoUpdate(false)`. |
+| "`applyUpdate()` is a no-op inside the callback" | True (`_transportBusy` is held by the check at `:530`), but that is the supported deferred pattern, and it is already documented in `examples/AdvancedExample/AdvancedExample.ino:8-11, 62-66, 119, 132-147` and linked from the README "Next steps". |
+| "`std::function` variant makes the hook usable with `autoUpdate(true)`" | False. Both forms are equally synchronous: the wrapper changes syntax, not capability. What `autoUpdate(true)` cannot do is *defer*, and no hook fired inside a synchronous library call can provide a loop turn — the tool for that is `setAutoUpdate(false)`. |
+| Proposed emit point (start of `applyUpdateInternal()`, `:545`) | Functionally identical to `UpdateAvailable`: only `_busy.exchange()`, `isValid()` and `isVersionIgnored()` run in between, no allocation. Zero added capability, plus public API surface and a second "before the download" event to confuse integrators. |
+
+The real gap (why the need behind the issue is legitimate, but located elsewhere): the 4 KB
+contiguous block must exist at `Update.begin()` (`:691`), which runs **after** `http.GET()`
+(`:584`), i.e. after the download's own TCP+TLS handshake. Memory freed early — in the
+`UpdateAvailable` callback — can therefore be re-consumed by our own transport before the
+allocation that matters. The field data of #1 is consistent with exactly this: an app-side gate
+at 12,288 B (`#1`, "Workaround used today") and, seconds before the failure,
+`free heap 24,136 / largest block 8,692` — the margin evaporates in the window that contains
+the transport setup, and `Update.begin()` still failed. Freeing *late*, immediately before
+`beginUpdate()`, is the only position where the freed block is still available to the 4 KB
+allocation — and today there is no hook there in any flow (`autoUpdate(false)` does not help:
+`applyUpdate()` runs handshake → `beginUpdate()` with no callback in between).
+
+Options:
+- **A (minimal)** — close #2 as works-as-intended; the flow exists and is documented; at most
+  add a README pointer to `AdvancedExample`.
+- **B (re-scope, preferred if accepted)** — emit the event between `:595` and `:597` (after the
+  GET / de-chunking setup, before `beginUpdate()`), with a positional name
+  (`BeforeUpdateBegin`), contract: synchronous, no API calls, instantaneous frees only. It
+  composes with #1 into pre-check → hook → re-check → `Update.begin()`. It must not be sold as
+  a way to do graceful multi-turn shutdown: that remains `autoUpdate(false)`.
+
