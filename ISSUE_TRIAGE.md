@@ -166,3 +166,86 @@ Options:
   composes with #1 into pre-check → hook → re-check → `Update.begin()`. It must not be sold as
   a way to do graceful multi-turn shutdown: that remains `autoUpdate(false)`.
 
+
+## The 4 KB block: lifecycle and the two free windows
+
+Verified against arduino-esp32 master (`libraries/Update/src/Updater.cpp`); the issue's log line
+`Updater.cpp:184` is an older core, same mechanism.
+
+### The block itself
+
+```cpp
+// UpdateClass::begin()  (Updater.cpp:319 on master)
+_buffer = new (std::nothrow) uint8_t[SPI_FLASH_SEC_SIZE];   // 4096 bytes
+if (!_buffer) {
+  log_e("_buffer allocation failed");
+  return false;          // NOTE: _error is NOT set -> Update.getError() stays 0
+}
+```
+
+- It is the **flash staging buffer**: it must be one **contiguous** 4096-byte block, and it is
+  held for the **whole OTA window** (`_size` is assigned only after it succeeds, and it is the
+  first thing `Update.write()` needs).
+- Freed only in `_reset()` (`delete[] _buffer`), which is called by `begin()` at the start of a
+  session, by `abort()` and by `end()` (both success paths) — i.e. at the end of the OTA window,
+  not "right after".
+- Confirms #1 from the core side: the failure path returns `false` **without** setting `_error`,
+  so `Update.getError() == UPDATE_ERROR_OK (0)` — a partition error and an allocation failure
+  look identical from the application.
+- Also useful for #3: `_size` is set **after** the allocation, so a failed `begin()` leaves
+  `Update` in the "not running" state and a retry is clean.
+
+### Timeline of one OTA cycle (allocation points)
+
+| # | Point | What is allocated |
+| --- | --- | --- |
+| 0 | `UpdateAvailable` callback — `OtamaticClient.cpp:508` | **the only app-visible free window today** |
+| 1 | `http.begin()` — `:569` | negligible (uri `String`, header map) |
+| 2 | **`http.GET()` — `:584`** → `HTTPClient::connect()` → `_client->connect()` (`HTTPClient.cpp:1175`) | **the download's own TCP+TLS session: mbedtls contexts + contiguous in/out buffers (tens of KB)** |
+| 3 | `collectHeaders`/`addHeader`, `ChunkDecodingStream` — `:579-594` | few hundred bytes |
+| 4 | **`Update.begin()` — `:691`** | **the contiguous 4096 bytes** — where the field failure happens |
+| 5 | `new UpdateState()` `:697` + SHA-256 context `:701` | ~100-200 bytes (#4.5) |
+
+TLS sessions are allocated in `connect()` and freed in `stop()`
+(`HTTPClient::disconnect()`, `HTTPClient.cpp:435`, reached via `http.end()`). The check's own
+session is already released at `:446`, so the download re-allocates one **inside the window**
+between the only available free hook and `Update.begin()`.
+
+### Consequence: freeing early is necessary but not sufficient
+
+- **necessary**: if there is no room for the download's TLS session, `GET()` fails first (a
+  different error: ConnectionFailed/HttpFailed) and we never even reach `Update.begin()`;
+- **not sufficient**: the freed block sits in the pool and the download's TLS session — allocated
+  *after* the free — can take it (or fragment around it), so contiguity for the 4 KB is not
+  guaranteed. Consistent with the field data of #1: app-level gate at 12,288 B, telemetry at
+  `free 24,136 / largest 8,692` shortly before, and `_buffer allocation failed` anyway.
+
+Therefore two hooks with different jobs, not one:
+
+| Window | Where | Purpose | Exists today? |
+| --- | --- | --- | --- |
+| **A — before the transport** | `UpdateAvailable` (`:508`), or the manual `applyUpdate()` from `loop()` | let the download's TLS session fit (stop BLE/MQTT/web server), or decide to postpone | ✅ yes (`setAutoUpdate(false)` + flag, documented in `AdvancedExample`) |
+| **B — before the OTA buffer** | inside `beginUpdate()`, immediately before `Update.begin()` (`:691`) | secure the contiguous 4 KB when the download session is already up and can no longer steal the RAM | ❌ **no, in no flow** |
+
+Window B is the genuinely missing capability behind #2, and placing it inside `beginUpdate()`
+covers the portal upload path too (`OtamaticWebPortal.cpp:491`). Contract: synchronous, few
+instructions, no library API calls (`_busy` is held), **instantaneous frees only** — it cannot
+replace window A when the application needs a loop turn. Cost: a wasted connection + request
+headers (the body has not been read yet, so no bandwidth).
+
+### Measure before designing
+
+Three log points are enough to decide which window matters, and they are also half of #1's
+pre-flight check:
+
+```cpp
+static void logHeap(const char* tag) {
+    log_i("[%s] free=%u largest=%u", tag, ESP.getFreeHeap(),
+          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+}
+```
+
+called in the `UpdateAvailable` callback, immediately before `beginUpdate()` (`:597`), and in the
+`Update.begin()` failure path (`:692`). If the value collapses between the first two points, the
+transport is what eats the margin and window B is the only mitigation available without #4.
+
