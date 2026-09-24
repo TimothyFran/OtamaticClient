@@ -1,5 +1,6 @@
 #include "OtamaticClient.h"
 #include "OtamaticWebPortal.h"
+#include <esp_heap_caps.h>
 #include <esp_mac.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
@@ -26,6 +27,15 @@ constexpr char kVerifyNamespace[] = "otamatic";
 constexpr char kVerifyKey[] = "pending_fw";
 constexpr char kIgnoredVersionKey[] = "ignored_ver";
 constexpr char kIgnoredFailuresKey[] = "ignored_cnt";
+
+// Diagnostic (#1 / #2): heap state at the three points of the window between
+// "an update is known" and Update.begin(). Remove once the 4 KB margin question
+// is settled. Logging does not allocate on the heap, so it does not perturb the
+// measurement.
+void logHeapGauge(const char* tag) {
+    log_i("[heap] %s: free=%u largest_block=%u", tag, (unsigned)ESP.getFreeHeap(),
+          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+}
 }  // namespace
 
 OtamaticClient::~OtamaticClient() {
@@ -505,6 +515,8 @@ void OtamaticClient::requestCheckNowInternal(bool restartCounter) {
         return;
     }
 
+    // (1) what the UpdateAvailable callback sees: before the download transport.
+    logHeapGauge("1-update-available/pre-transport");
     transmitEvent(OtamaticClientEvent::UpdateAvailable);
 
     if (!_autoUpdate) return;
@@ -594,6 +606,8 @@ bool OtamaticClient::applyUpdateInternal() {
     ChunkDecodingStream decodedStream(http.getStream());
     Stream* stream = isChunked ? static_cast<Stream*>(&decodedStream) : http.getStreamPtr();
 
+    // (2) after the download's own TLS session is up, before the OTA write buffer.
+    logHeapGauge("2-pre-beginUpdate/post-handshake");
     if (! beginUpdate(_checkData.size, _checkData.size, OtamaticUpdateTarget::Firmware)) {
         http.end();
         recordAttemptFailure(targetVersion);
@@ -690,6 +704,8 @@ bool OtamaticClient::beginUpdate(uint32_t size, uint32_t progressTotal, Otamatic
 
     if (! Update.begin(size, writeFirmware ? U_FLASH : U_SPIFFS)) {
         log_e("%s (Update.begin error: %u)", reinterpret_cast<const char*>(OtamaticClient::getErrorName(OtamaticClientError::BeginFailed)), Update.getError());
+        // (3) the allocation failed: the margin the application should have freed for.
+        logHeapGauge("3-update-begin-failed");
         transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::BeginFailed);
         return false;
     }
