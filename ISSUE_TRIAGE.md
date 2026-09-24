@@ -166,6 +166,9 @@ Options:
   composes with #1 into pre-check → hook → re-check → `Update.begin()`. It must not be sold as
   a way to do graceful multi-turn shutdown: that remains `autoUpdate(false)`.
 
+Posted as a comment on #2 (concise version + the three log points):
+https://github.com/TimothyFran/OtamaticClient/issues/2#issuecomment-5820547562
+
 
 ## The 4 KB block: lifecycle and the two free windows
 
