@@ -17,6 +17,7 @@ build/
 .pio/
 .pioenvs/
 .piolibdeps/
+platformio.ini
 
 # Cline
 .clinerules
