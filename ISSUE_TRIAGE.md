@@ -252,3 +252,43 @@ called in the `UpdateAvailable` callback, immediately before `beginUpdate()` (`:
 `Update.begin()` failure path (`:692`). If the value collapses between the first two points, the
 transport is what eats the margin and window B is the only mitigation available without #4.
 
+
+## Diagnostic patch implemented
+
+Commit `4a453fd` on `cline/3trejwat`: `src/OtamaticClient.cpp` only, no header change, no API
+change. One file-local helper in the existing anonymous namespace:
+
+```cpp
+void logHeapGauge(const char* tag) {                    // OtamaticClient.cpp:35
+    log_i("[heap] %s: free=%u largest_block=%u", tag, (unsigned)ESP.getFreeHeap(),
+          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+}
+```
+
+plus `#include <esp_heap_caps.h>` and the three call sites:
+
+| Point | Line | Tag |
+| --- | --- | --- |
+| 1 | `:519` (right before `transmitEvent(UpdateAvailable)`) | `1-update-available/pre-transport` |
+| 2 | `:610` (right before the `beginUpdate()` call, after the GET) | `2-pre-beginUpdate/post-handshake` |
+| 3 | `:708` (in the `Update.begin()` failure path) | `3-update-begin-failed` |
+
+Expected output:
+
+```
+[I][OtamaticClient.cpp:36] logHeapGauge(): [heap] 1-update-available/pre-transport: free=24136 largest_block=8692
+[I][OtamaticClient.cpp:36] logHeapGauge(): [heap] 2-pre-beginUpdate/post-handshake: free=...
+[I][OtamaticClient.cpp:36] logHeapGauge(): [heap] 3-update-begin-failed: free=...
+```
+
+Note for reading the log: `file:line` is always the same (`OtamaticClient.cpp:36`, the `log_i`
+inside the helper), so the three points are identified by the `N-...` tag, not by the position in
+the file. Points 1 and 2 appear on every update; point 3 only on a failure.
+
+Verified without a target toolchain: `heap_caps_get_largest_free_block(uint32_t)` is declared in
+`esp_heap_caps.h:253` of esp-idf, `MALLOC_CAP_DEFAULT` at `:43` of the same header,
+`ESP.getFreeHeap()` in arduino-esp32 `cores/esp32/Esp.h:68`; the helper was compiled standalone
+with `g++ -std=gnu++17 -Wall -Wextra -Wformat=2` (stubs mirroring those signatures) with no
+warnings. `log_i` is `CORE_DEBUG_LEVEL >= 1` in practice (the repo's `platformio.ini` already
+builds with `-DCORE_DEBUG_LEVEL=4`), so the lines are visible in a normal build.
+
