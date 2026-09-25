@@ -289,6 +289,8 @@ Verified without a target toolchain: `heap_caps_get_largest_free_block(uint32_t)
 `esp_heap_caps.h:253` of esp-idf, `MALLOC_CAP_DEFAULT` at `:43` of the same header,
 `ESP.getFreeHeap()` in arduino-esp32 `cores/esp32/Esp.h:68`; the helper was compiled standalone
 with `g++ -std=gnu++17 -Wall -Wextra -Wformat=2` (stubs mirroring those signatures) with no
-warnings. `log_i` is `CORE_DEBUG_LEVEL >= 1` in practice (the repo's `platformio.ini` already
-builds with `-DCORE_DEBUG_LEVEL=4`), so the lines are visible in a normal build.
+warnings. `log_i` is `CORE_DEBUG_LEVEL >= 1` in practice, so the lines are visible in any default
+build. (This branch is based on `a5d3447`, where `platformio.ini` exists and builds with
+`-DCORE_DEBUG_LEVEL=4`; upstream `main` at `2c1dd982` later removed that file and added it to
+`.gitignore`. The diagnostic does not depend on it.)
 
