@@ -13,6 +13,20 @@ installs it automatically.
 - Local update portal for manual uploads from a browser
 - Event-based API to observe the update lifecycle
 
+## The Otamatic platform
+
+Devices can be easily managed through the **[Otamatic](https://www.otamatic.eu)** platform at
+[www.otamatic.eu](https://www.otamatic.eu), which lets you set up and manage your
+devices fleet in **less than 5 minutes**.
+
+It offers advanced features, including:
+
+- Multiple codebases
+- Release channels
+- Scheduled releases
+- Staged rollout releases
+- Release monitoring
+
 ## Requirements
 
 - ESP32 board with the Arduino framework
@@ -78,6 +92,7 @@ them automatically (rebooting when done).
 
 ## Next steps
 
+- Create your account on the [Otamatic platform](https://www.otamatic.eu) — in under 5 minutes.
 - Browse the [examples](examples/) to go further:
   - [WiFiBasic](examples/WiFiBasic/WiFiBasic.ino) — basic setup with event logging
   - [SignatureExample](examples/SignatureExample/SignatureExample.ino) — firmware signature verification
