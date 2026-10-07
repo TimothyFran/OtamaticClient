@@ -205,7 +205,7 @@
     <section id="v1">
       <h1>Write to this device</h1>
       <p class="sub" id="sub">Pick a firmware or filesystem image: its header decides where it goes.</p>
-      <form id="m" method="POST" action="/update" enctype="multipart/form-data">
+      <form id="m" method="POST" action="" enctype="multipart/form-data">
         <input type="hidden" name="filesize" id="s" value="">
         <div class="tg" role="radiogroup" aria-labelledby="tg-t">
           <p class="eb" id="tg-t">Image type</p>
@@ -353,7 +353,7 @@
         payload.append("target", target);
         payload.append("update", file, file.name);
         var xhr = new XMLHttpRequest();
-        xhr.open("POST", "/update");
+        xhr.open("POST", location.pathname);
         showView(2);
         writingTitle.textContent = target === "filesystem" ? "Writing filesystem"
           : (target === "firmware" ? "Writing firmware" : "Writing image");

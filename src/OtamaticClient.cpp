@@ -287,13 +287,13 @@ void OtamaticClient::loop() {
     }
 }
 
-bool OtamaticClient::startPortal(uint32_t timeoutMs, const char* username, const char* password) {
+bool OtamaticClient::startPortal(AsyncWebServer* server, const char* endpoint, uint32_t timeoutMs) {
     if (_busy.load()) {
         log_w("Check or update in progress, portal start ignored");
         return false;
     }
     if (_portal == nullptr) _portal = new OtamaticWebPortal(*this);
-    return _portal->start(timeoutMs, username, password);
+    return _portal->start(server, endpoint, timeoutMs);
 }
 
 void OtamaticClient::stopPortal() {

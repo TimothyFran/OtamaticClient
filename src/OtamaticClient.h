@@ -8,10 +8,11 @@
 #include "OtamaticUpdateTarget.h"
 #include "OtamaticVersionCheckData.h"
 
+class AsyncWebServer;
 class OtamaticWebPortal;
 
 // Version of the OtamaticClient library itself.
-#define OTAMATIC_CLIENT_VERSION "0.3.1"
+#define OTAMATIC_CLIENT_VERSION "0.4.0"
 
 class OtamaticClient {
 public:
@@ -201,15 +202,18 @@ public:
     void setPublicKey(const char* key);
 
     /**
-     * Start the local update portal (browser upload of an image).
-     * Requires an active SoC network interface (Wi-Fi or wired).
+     * Attach the local update portal to a user-owned AsyncWebServer.
+     * Registers GET <endpoint> (page), POST <endpoint> (upload) and
+     * GET /api/info. The server is not started here: the caller owns it and
+     * must call server.begin()/end(). It must outlive this client. Call again
+     * to reconfigure with a different server or endpoint.
+     * @param server User-owned server (must not be nullptr).
+     * @param endpoint Page and upload path ("/" by default).
      * @param timeoutMs Inactivity timeout in ms (0 = no timeout).
-     * @param username HTTP Basic auth username (nullptr = auth disabled).
-     * @param password HTTP Basic auth password (nullptr = auth disabled).
      */
-    bool startPortal(uint32_t timeoutMs = 0, const char* username = nullptr, const char* password = nullptr);
+    bool startPortal(AsyncWebServer* server, const char* endpoint = "/", uint32_t timeoutMs = 0);
 
-    /** Stop the portal, aborting any upload in progress. */
+    /** Detach the portal routes, aborting any upload in progress. */
     void stopPortal();
 
     /** @return true if the portal is active. */

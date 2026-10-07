@@ -51,7 +51,7 @@ Add it to the `lib_deps` section of your `platformio.ini`:
 [env:esp32dev]
 platform = espressif32
 framework = arduino
-lib_deps = timothyfran/OtamaticClient @ ^0.3.1
+lib_deps = timothyfran/OtamaticClient @ ^0.4.0
 ```
 
 or install it from the PlatformIO Home → **Libraries** panel by searching for

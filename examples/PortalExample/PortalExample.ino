@@ -16,6 +16,7 @@
 #include <Arduino.h>
 #include <OtamaticClient.h>
 #include <WiFi.h>
+#include <ESPAsyncWebServer.h>
 
 // Current firmware version, should be incremental, starting from 1
 #define OTAMATIC_FIRMWARE_VERSION 1
@@ -25,6 +26,9 @@ const char* kWifiPassword = "your-wifi-password";
 const char* kOtamaticServiceKey = "your-otamatic-service-key";
 
 WiFiClient httpClient;
+
+// Web server owned by the sketch: the portal only attaches its routes to it.
+AsyncWebServer server(80);
 
 OtamaticClient ota;
 
@@ -88,11 +92,14 @@ void setup() {
             Serial.println(WiFi.softAPIP());
 
             ota.setAutoRestart(true);
-            if (!ota.startPortal(60000)) {
+
+            if (!ota.startPortal(&server, "/", 60000)) {
                 Serial.println("Portal failed to start -- Restarting");
                 delay(1000);
                 ESP.restart();
             }
+            server.begin();
+            
             start = millis();
 
             while (millis() - start < 60000) {

@@ -2,24 +2,6 @@
 #include "OtamaticClient.h"
 #include "PortalPage.h"
 #include <Update.h>
-#include <lwip/netif.h>
-#include <lwip/ip4_addr.h>
-
-// First interface that is up with a valid IPv4 address (station, soft-AP, wired).
-// netif_default is not enough: with station disconnected and soft-AP up it
-// still points at the station.
-static IPAddress getLocalIp() {
-    struct netif* iface = nullptr;
-    NETIF_FOREACH(iface) {
-        if (! netif_is_up(iface)) continue;
-        const ip4_addr_t* addr = netif_ip4_addr(iface);
-        if (addr != nullptr && addr->addr != 0) {
-            return IPAddress(addr->addr);
-        }
-    }
-    // No interface up with a valid address yet.
-    return IPAddress(IPADDR_NONE);
-}
 
 /** Hidden form fields (keep in sync with extras/index.html). */
 static const char kSizeField[] = "filesize";
@@ -125,46 +107,41 @@ OtamaticWebPortal::~OtamaticWebPortal() {
     stop();
 }
 
-bool OtamaticWebPortal::start(uint32_t timeoutMs, const char* username, const char* password) {
-    if (_active) {
-        log_w("Portal already active, keeping the current instance");
-        return true;
-    }
-
-    const bool authEnabled = username != nullptr && username[0] != '\0' &&
-                             password != nullptr && password[0] != '\0';
-    if ((username != nullptr || password != nullptr) && ! authEnabled) {
-        log_w("Portal auth needs both username and password, starting without auth");
-    }
-    strlcpy(_authUser, authEnabled ? username : "", sizeof(_authUser));
-    strlcpy(_authPass, authEnabled ? password : "", sizeof(_authPass));
-
-    const IPAddress localIp = getLocalIp();
-    if (localIp == IPAddress(IPADDR_NONE)) {
-        log_e("Portal requires an active network interface (Wi-Fi or wired)");
-        _client.transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::ConnectionFailed);
+bool OtamaticWebPortal::start(AsyncWebServer* server, const char* endpoint, uint32_t timeoutMs) {
+    if (server == nullptr) {
+        log_e("Portal start requires a user-owned AsyncWebServer");
+        _client.transmitEvent(OtamaticClientEvent::OperationFailed, (uint8_t)OtamaticClientError::ConfigInvalid);
         return false;
     }
+    if (endpoint == nullptr || endpoint[0] == '\0') endpoint = "/";
 
-    _server = new AsyncWebServer(kPortalPort);
+    // Re-set: detach the previous routes before attaching the new ones.
+    if (_active) {
+        const bool busy = withState([](SharedState& s) {
+            return s.state == UploadState::InProgress ||
+                   s.state == UploadState::AbortRequested ||
+                   s.state == UploadState::Finalizing;
+        });
+        if (busy) {
+            log_w("Portal upload in progress, reconfigure ignored");
+            return false;
+        }
+        detachRoutes();
+        _active = false;
+    }
+
+    _server = server;
 
     // Update form, served gzipped from flash.
-    _server->on("/", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (! checkAuth(request)) {
-            request->requestAuthentication(AsyncAuthType::AUTH_BASIC, kAuthRealm);
-            return;
-        }
+    auto& pageHandler = _server->on(endpoint, HTTP_GET, [this](AsyncWebServerRequest* request) {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html", index_html_gz, index_html_gz_len);
         response->addHeader("Content-Encoding", "gzip");
         request->send(response);
     });
+    _pageHandler = &pageHandler;
 
-    _server->on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (! checkAuth(request)) {
-            request->requestAuthentication(AsyncAuthType::AUTH_BASIC, kAuthRealm);
-            return;
-        }
+    auto& infoHandler = _server->on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
         // Fixed numeric part: {"deviceId":"<20>","firmwareVersion":<10>,
         //   "filesystemPartitionSize":<10>} -> 101 bytes worst case.
         // Optional: ,"versionName":"<31*6>" ,"portalTitle":"<31*6>"
@@ -202,18 +179,12 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs, const char* username, const ch
         response->addHeader("Cache-Control", "no-store");
         request->send(response);
     });
+    _infoHandler = &infoHandler;
 
     // Image upload: the request handler reports the final outcome and, when the
     // upload was refused or failed, the reason collected by the upload handler.
-    // NOTE: the multipart body chunks (handleUpload) cannot be auth-gated per
-    // chunk without buffering, so auth is checked on the final POST handler and
-    // the upload handler rejects chunks when the session was never authed.
-    _server->on("/update", HTTP_POST,
+    auto& uploadHandler = _server->on(endpoint, HTTP_POST,
         [this](AsyncWebServerRequest* request) {
-            if (! checkAuth(request)) {
-                request->requestAuthentication(AsyncAuthType::AUTH_BASIC, kAuthRealm);
-                return;
-            }
             bool done = false;
             bool succeeded = false;
             OtamaticUpdateTarget target = OtamaticUpdateTarget::Firmware;
@@ -246,12 +217,7 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs, const char* username, const ch
         [this](AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final) {
             handleUpload(request, filename, index, data, len, final);
         });
-
-    _server->onNotFound([](AsyncWebServerRequest* request) {
-        request->send(404, "text/plain", "Not found");
-    });
-
-    _server->begin();
+    _uploadHandler = &uploadHandler;
 
     _active = true;
     _timeoutMs = timeoutMs;
@@ -263,15 +229,15 @@ bool OtamaticWebPortal::start(uint32_t timeoutMs, const char* username, const ch
         s.succeeded = false;
         s.bytesWritten = 0;
     });
-    log_i("Update portal started on http://%s/ (timeout: %lu ms%s)",
-          localIp.toString().c_str(), (unsigned long)_timeoutMs,
-          _authUser[0] != '\0' ? ", auth: on" : "");
+    log_i("Update portal routes attached on '%s' (timeout: %lu ms)", endpoint, (unsigned long)_timeoutMs);
     return true;
 }
 
-bool OtamaticWebPortal::checkAuth(AsyncWebServerRequest* request) const {
-    if (_authUser[0] == '\0' || _authPass[0] == '\0') return true;  // auth disabled
-    return request->authenticate(_authUser, _authPass);
+void OtamaticWebPortal::detachRoutes() {
+    if (_server == nullptr) return;
+    if (_pageHandler != nullptr) { _server->removeHandler(_pageHandler); _pageHandler = nullptr; }
+    if (_infoHandler != nullptr) { _server->removeHandler(_infoHandler); _infoHandler = nullptr; }
+    if (_uploadHandler != nullptr) { _server->removeHandler(_uploadHandler); _uploadHandler = nullptr; }
 }
 
 void OtamaticWebPortal::stop() {
@@ -302,15 +268,10 @@ void OtamaticWebPortal::stop() {
         _client.abortUpdate(OtamaticClientError::DownloadFailed);
     }
 
-    if (_server != nullptr) {
-        _server->end();
-        delete _server;
-        _server = nullptr;
-    }
-    _authUser[0] = '\0';
-    _authPass[0] = '\0';
+    detachRoutes();
+    _server = nullptr;
     _active = false;
-    log_i("Update portal stopped");
+    log_i("Update portal routes detached");
 }
 
 void OtamaticWebPortal::handleLoop() {
@@ -403,13 +364,6 @@ void OtamaticWebPortal::handleUpload(AsyncWebServerRequest* request, const Strin
                                      size_t index, uint8_t* data, size_t len, bool final) {
     (void)filename;
 
-    // The upload body handler runs per chunk outside the POST response handler:
-    // reject unauthenticated streams before touching flash (defense in depth:
-    // the POST response handler re-checks auth before reporting success).
-    if (! checkAuth(request)) {
-        if (index == 0) log_w("Upload rejected, authentication required");
-        return;
-    }
     if (index == 0) {
         // Decide what is being written before touching flash: the page can force
         // the target, "auto" reads it from the image header.

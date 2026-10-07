@@ -15,7 +15,11 @@ class OtamaticClient;
  * to the next OTA partition) or a filesystem image such as LittleFS/SPIFFS
  * (written to the filesystem partition). Integrity and signature checks are
  * skipped; update events are emitted as usual.
- * Managed through OtamaticClient::startPortal()/stopPortal().
+ *
+ * The web server is owned by the user and must outlive this client: start()
+ * only attaches the routes (GET/POST <endpoint> and GET /api/info) to it and
+ * stop() detaches them. Call start() again to reconfigure (new server or
+ * endpoint). Managed through OtamaticClient::startPortal()/stopPortal().
  */
 class OtamaticWebPortal {
 public:
@@ -26,20 +30,21 @@ public:
     OtamaticWebPortal& operator=(const OtamaticWebPortal&) = delete;
 
     /**
-     * Start the portal. Call from loop().
-     * Requires a SoC network interface (Wi-Fi or wired), not an external modem.
+     * Attach the portal routes to a user-owned server. Call from loop().
+     * Registers GET <endpoint> (the page), POST <endpoint> (the upload) and
+     * GET /api/info (device info). The server is not started here: the caller
+     * owns it and is responsible for server.begin()/end(). Call again to
+     * reconfigure with a different server or endpoint.
+     * @param server User-owned server (must not be nullptr).
+     * @param endpoint Path of the page and upload ("/" if null/empty).
      * @param timeoutMs Inactivity timeout in ms (0 = disabled).
-     * @param username HTTP Basic auth username (nullptr = auth disabled).
-     * @param password HTTP Basic auth password (nullptr = auth disabled).
-     * Auth is active only when BOTH are non-null and non-empty.
      */
-    bool start(uint32_t timeoutMs = 0, const char* username = nullptr,
-               const char* password = nullptr);
+    bool start(AsyncWebServer* server, const char* endpoint = "/", uint32_t timeoutMs = 0);
 
-    /** Stop the portal, aborting any upload in progress. Call from loop(). */
+    /** Detach the portal routes, aborting any upload in progress. Call from loop(). */
     void stop();
 
-    /** @return true if the portal is running. */
+    /** @return true if the portal routes are attached. */
     bool isActive() const { return _active; }
 
     /** Service timeouts and post-upload restart. Call from loop(). */
@@ -48,6 +53,9 @@ public:
 private:
     void handleUpload(AsyncWebServerRequest* request, const String& filename,
                       size_t index, uint8_t* data, size_t len, bool final);
+
+    /** Remove the routes registered by start() from the current server. */
+    void detachRoutes();
 
     enum class UploadState : uint8_t {
         Idle,
@@ -111,7 +119,13 @@ private:
     void rejectUpload(const char* format, ...) __attribute__((format(printf, 2, 3)));
 
     OtamaticClient& _client;
+
+    /** User-owned server (borrowed: never created, started or deleted here). */
     AsyncWebServer* _server = nullptr;
+    /** Handlers registered by start(), kept so stop() can detach them. */
+    AsyncWebHandler* _pageHandler = nullptr;
+    AsyncWebHandler* _uploadHandler = nullptr;
+    AsyncWebHandler* _infoHandler = nullptr;
 
     bool _active = false;
     uint32_t _timeoutMs = 0;
@@ -120,15 +134,6 @@ private:
     mutable portMUX_TYPE _stateLock = portMUX_INITIALIZER_UNLOCKED;
     SharedState _shared;
 
-    /** Returns true when a request passed HTTP Basic auth (or auth disabled). */
-    bool checkAuth(AsyncWebServerRequest* request) const;
-
-    static constexpr size_t kAuthMaxLen = 33;  // 32 chars + NUL
-    char _authUser[kAuthMaxLen] = {0};
-    char _authPass[kAuthMaxLen] = {0};
-    static constexpr char kAuthRealm[] = "Otamatic";
-
     static constexpr uint32_t kUploadStallTimeout = 10000;
     static constexpr uint32_t kPostUploadGrace = 2000;
-    static constexpr uint16_t kPortalPort = 80;
 };
