@@ -99,6 +99,7 @@ them automatically (rebooting when done).
   - [AdvancedExample](examples/AdvancedExample/AdvancedExample.ino) — manual update and restart control
   - [PortalExample](examples/PortalExample/PortalExample.ino) — local update portal for manual uploads
 - See the `src/*.h` headers and the [extras](extras/) folder for the full API documentation.
+- Planning a self-hosted server? See [docs/API.md](docs/API.md) for the HTTP API specification.
 
 ## License
 
