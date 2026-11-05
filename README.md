@@ -90,6 +90,58 @@ void loop() {
 That's it: the device now checks for updates every 5 minutes and applies
 them automatically (rebooting when done).
 
+## Events
+
+The client reports every step of the update lifecycle through a callback, so
+your sketch can react (log, drive LEDs, notify a server, ...). Each event
+carries typed data: an error code for failures, the progress percentage
+during the download, and the firmware version/size involved.
+
+```cpp
+void onOtaEvent(const OtamaticClientEventData& event) {
+    switch (event.event) {
+        case OtamaticClientEvent::UpdateProgress:
+            Serial.printf("Downloading: %u%%\n", event.progress);
+            break;
+        case OtamaticClientEvent::OperationFailed:
+            Serial.printf("OTA failed: %s\n", OtamaticClient::getErrorName(event.error));
+            break;
+        default:
+            Serial.printf("OTA event: %s (version %lu)\n",
+                          OtamaticClient::getEventName(event.event),
+                          (unsigned long)event.version);
+            break;
+    }
+}
+
+void setup() {
+    // ...
+    ota.onEvent(onOtaEvent);
+    ota.begin(FIRMWARE_VERSION, "your-otamatic-service-key");
+}
+```
+
+If you need to forward a context (e.g. a class instance), register the
+callback with a user pointer:
+
+```cpp
+void onOtaEventEx(const OtamaticClientEventData& event, void* userData) {
+    MyClass* self = static_cast<MyClass*>(userData);
+    self->handleOtaEvent(event);
+}
+
+// ...
+ota.onEvent(onOtaEventEx, &myInstance);
+```
+
+The callback runs synchronously in the context of the task that generated the
+event (the auto-check task or the caller of `checkForUpdate()`/`applyUpdate()`):
+keep it short and do not call back into the client from inside it.
+
+Event and error codes are plain enums (`OtamaticClientEvent`,
+`OtamaticClientError`); `OtamaticClient::getEventName()` and
+`OtamaticClient::getErrorName()` turn them into human-readable strings.
+
 ## Next steps
 
 - Create your account on the [Otamatic platform](https://www.otamatic.eu) — in under 5 minutes.

@@ -2,6 +2,7 @@
 
 #include <esp_err.h>
 #include <otamatic/otamatic_config.hpp>
+#include <otamatic/otamatic_events.hpp>
 #include <otamatic/otamatic_update.hpp>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -42,10 +43,36 @@ class OtamaticClient {
         /// @return true if the operation was successful, false otherwise
         bool applyUpdate();
 
+        /// @brief Registers a simple event callback (no user context).
+        /// @param callback Function invoked for every client event, or nullptr to unregister.
+        void onEvent(OtamaticClientEventCallback callback);
+
+        /// @brief Registers an event callback with a user context pointer.
+        /// @param callback Function invoked for every client event, or nullptr to unregister.
+        /// @param userData Opaque pointer forwarded to the callback (e.g. a class instance).
+        void onEvent(OtamaticClientEventCallbackEx callback, void* userData);
+
+        /// @brief Returns a human-readable name for an event type.
+        static const char* getEventName(OtamaticClientEvent event);
+
+        /// @brief Returns a human-readable name for an error code.
+        static const char* getErrorName(OtamaticClientError error);
+
     private:
         OtamaticConfig config;
         TaskHandle_t taskHandle = nullptr;
         OtamaticUpdate pendingUpdate;
+
+        OtamaticClientEventCallback eventCallback = nullptr;
+        OtamaticClientEventCallbackEx eventCallbackEx = nullptr;
+        void* eventUserData = nullptr;
+
+        /// @brief Builds the event data and delivers it to the registered callback (if any).
+        void transmitEvent(OtamaticClientEvent event,
+                           OtamaticClientError error = OtamaticClientError::None,
+                           uint8_t progress = 0,
+                           uint32_t version = 0,
+                           uint32_t size = 0);
 
         static void autoCheckTaskWrapper(void* pvParameters) {
             OtamaticClient* instance = static_cast<OtamaticClient*>(pvParameters);

@@ -276,6 +276,7 @@ OtamaticClient::~OtamaticClient() {
 bool OtamaticClient::begin(const OtamaticConfig& config) {
     if (config.apiKey == nullptr || config.apiBaseUrl == nullptr) {
         ESP_LOGE(TAG, "Invalid configuration: apiKey and apiBaseUrl are required");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConfigInvalid);
         return false;
     }
 
@@ -347,6 +348,76 @@ bool OtamaticClient::isAutoCheckRunning() {
     return this->taskHandle != nullptr;
 }
 
+void OtamaticClient::onEvent(OtamaticClientEventCallback callback) {
+    this->eventCallback = callback;
+    if (callback != nullptr) {
+        this->eventCallbackEx = nullptr;
+        this->eventUserData = nullptr;
+    }
+}
+
+void OtamaticClient::onEvent(OtamaticClientEventCallbackEx callback, void* userData) {
+    this->eventCallbackEx = callback;
+    this->eventUserData = callback != nullptr ? userData : nullptr;
+    if (callback != nullptr) {
+        this->eventCallback = nullptr;
+    }
+}
+
+void OtamaticClient::transmitEvent(OtamaticClientEvent event, OtamaticClientError error,
+                                   uint8_t progress, uint32_t version, uint32_t size) {
+    if (this->eventCallbackEx == nullptr && this->eventCallback == nullptr) return;
+
+    OtamaticClientEventData data;
+    data.event = event;
+    data.error = error;
+    data.progress = progress;
+    data.version = version;
+    data.size = size;
+
+    if (this->eventCallbackEx != nullptr) {
+        this->eventCallbackEx(data, this->eventUserData);
+    } else {
+        this->eventCallback(data);
+    }
+}
+
+const char* OtamaticClient::getEventName(OtamaticClientEvent event) {
+    switch (event) {
+        case OtamaticClientEvent::CheckingForUpdate: return "Checking for update";
+        case OtamaticClientEvent::UpdateAvailable: return "Update available";
+        case OtamaticClientEvent::UpdateNotNeeded: return "Update not needed";
+        case OtamaticClientEvent::UpdateIgnored: return "Update ignored";
+        case OtamaticClientEvent::UpdateStarted: return "Update started";
+        case OtamaticClientEvent::UpdateProgress: return "Update progress";
+        case OtamaticClientEvent::UpdateCompleted: return "Update completed";
+        case OtamaticClientEvent::UpdateConfirmed: return "Update confirmed";
+        case OtamaticClientEvent::UpdateRolledBack: return "Update rolled back";
+        case OtamaticClientEvent::OperationFailed: return "Operation failed";
+    }
+    return "Unknown event";
+}
+
+const char* OtamaticClient::getErrorName(OtamaticClientError error) {
+    switch (error) {
+        case OtamaticClientError::None: return "No error";
+        case OtamaticClientError::ConfigInvalid: return "Invalid configuration";
+        case OtamaticClientError::ConnectionFailed: return "Connection failed";
+        case OtamaticClientError::HttpFailed: return "HTTP error";
+        case OtamaticClientError::InvalidCheckData: return "Invalid check data";
+        case OtamaticClientError::InvalidFirmware: return "Invalid firmware";
+        case OtamaticClientError::BeginFailed: return "Update begin failed";
+        case OtamaticClientError::DownloadFailed: return "Download failed";
+        case OtamaticClientError::WriteFailed: return "Write failed";
+        case OtamaticClientError::EndFailed: return "Update finalization failed";
+        case OtamaticClientError::IntegrityFailed: return "Integrity check failed";
+        case OtamaticClientError::SignatureFailed: return "Signature check failed";
+        case OtamaticClientError::InvalidImage: return "Invalid image";
+        case OtamaticClientError::VerificationFailed: return "Verification failed";
+    }
+    return "Unknown error";
+}
+
 void OtamaticClient::autoCheckTask(void* arg) {
     ESP_LOGI(TAG, "Auto-check task started");
 
@@ -378,8 +449,11 @@ bool OtamaticClient::checkForUpdate() {
 esp_err_t OtamaticClient::checkForUpdateInternal() {
     pendingUpdate.clear();
 
+    transmitEvent(OtamaticClientEvent::CheckingForUpdate);
+
     if (this->config.apiKey == nullptr || this->config.apiBaseUrl == nullptr) {
         ESP_LOGE(TAG, "Invalid configuration: apiKey and apiBaseUrl are required");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConfigInvalid);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -395,6 +469,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     );
     if (urlLen < 0 || (size_t)urlLen >= sizeof(url)) {
         ESP_LOGE(TAG, "Update check URL truncated (apiBaseUrl too long)");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConfigInvalid);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -420,6 +495,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConnectionFailed);
         return ESP_FAIL;
     }
 
@@ -429,6 +505,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConnectionFailed);
         return err;
     }
 
@@ -436,6 +513,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     if (contentLength < 0) {
         ESP_LOGE(TAG, "Failed to fetch HTTP headers");
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConnectionFailed);
         return ESP_FAIL;
     }
     int httpCode = esp_http_client_get_status_code(client);
@@ -443,6 +521,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     if (httpCode != 200) {
         ESP_LOGE(TAG, "Update check failed with HTTP status %d", httpCode);
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::HttpFailed);
         return ESP_FAIL;
     }
 
@@ -454,6 +533,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
 
     if (error) {
         ESP_LOGE(TAG, "Failed to parse update info JSON: %s", error.c_str());
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
         return ESP_FAIL;
     }
 
@@ -461,12 +541,14 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     // up-to-date device: fail explicitly instead of silently returning.
     if (!doc["version"].is<uint32_t>()) {
         ESP_LOGE(TAG, "Update info JSON is missing a valid 'version' field");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
         return ESP_ERR_INVALID_RESPONSE;
     }
     uint32_t newVersion = doc["version"].as<uint32_t>();
     if (this->config.firmwareVersion >= newVersion) {
         ESP_LOGD(TAG, "Firmware is up to date (version %lu)",
                  static_cast<unsigned long>(this->config.firmwareVersion));
+        transmitEvent(OtamaticClientEvent::UpdateNotNeeded, OtamaticClientError::None, 0, newVersion);
         return ESP_OK;
     }
 
@@ -479,11 +561,13 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     // Reject missing, non-integer, non-positive or overflowing sizes.
     if (!doc["size"].is<int32_t>()) {
         ESP_LOGE(TAG, "Update info JSON is missing a valid 'size' field");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
         return ESP_ERR_INVALID_RESPONSE;
     }
     const int32_t sizeValue = doc["size"].as<int32_t>();
     if (sizeValue <= 0) {
         ESP_LOGE(TAG, "Invalid firmware size in update info: %ld", static_cast<long>(sizeValue));
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidFirmware);
         return ESP_FAIL;
     }
 
@@ -496,6 +580,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
         ESP_LOGE(TAG, "Firmware size %lu exceeds OTA partition size %lu",
                  static_cast<unsigned long>(sizeValue),
                  static_cast<unsigned long>(otaPartitionSize));
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidFirmware);
         return ESP_FAIL;
     }
 
@@ -504,6 +589,7 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     if (!isValidHexDigest(integrity)) {
         ESP_LOGE(TAG, "Firmware update integrity hash is missing or not a %u-char hex digest",
                  static_cast<unsigned>(OtamaticUpdate::kIntegrityMaxLen));
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::IntegrityFailed);
         return ESP_FAIL;
     }
 
@@ -512,25 +598,33 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     const char* signature = doc["signature"] | "";
     if (strlen(signature) == 0 && this->config.requireSignedUpdates) {
         ESP_LOGE(TAG, "Firmware update signature is missing");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::SignatureFailed);
         return ESP_FAIL;
     }
     if (strlen(signature) > OtamaticUpdate::kSignatureMaxLen) {
         ESP_LOGE(TAG, "Firmware update signature is too long (%u chars, max %u)",
                  static_cast<unsigned>(strlen(signature)),
                  static_cast<unsigned>(OtamaticUpdate::kSignatureMaxLen));
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
         return ESP_FAIL;
     }
-    
+
     pendingUpdate.version = newVersion;
     pendingUpdate.size = static_cast<uint32_t>(sizeValue);
     strlcpy(pendingUpdate.integrity, integrity, sizeof(pendingUpdate.integrity));
     strlcpy(pendingUpdate.signature, signature, sizeof(pendingUpdate.signature));
 
+    transmitEvent(OtamaticClientEvent::UpdateAvailable, OtamaticClientError::None, 0,
+                  pendingUpdate.version, pendingUpdate.size);
+
     return ESP_OK;
 }
 
 bool OtamaticClient::applyUpdate() {
-    if (!pendingUpdate.isValid()) return false;
+    if (!pendingUpdate.isValid()) {
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
+        return false;
+    }
     return applyUpdateInternal() == ESP_OK;
 }
 
@@ -540,11 +634,13 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
 
     if (this->config.apiKey == nullptr || this->config.apiBaseUrl == nullptr) {
         ESP_LOGE(TAG, "Invalid configuration: apiKey and apiBaseUrl are required");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConfigInvalid);
         return ESP_ERR_INVALID_ARG;
     }
 
     if (!pendingUpdate.isValid()) {
         ESP_LOGE(TAG, "No valid pending update to apply");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -559,6 +655,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
     );
     if (urlLen < 0 || (size_t)urlLen >= sizeof(url)) {
         ESP_LOGE(TAG, "Update check URL truncated (apiBaseUrl too long)");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConfigInvalid);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -584,6 +681,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConnectionFailed);
         return ESP_FAIL;
     }
 
@@ -593,6 +691,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConnectionFailed);
         return err;
     }
 
@@ -601,6 +700,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
     if (httpCode != 200) {
         ESP_LOGE(TAG, "Firmware download failed with HTTP status %d", httpCode);
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::HttpFailed);
         return ESP_FAIL;
     }
     // The body must be exactly the size announced by the check endpoint; a
@@ -610,6 +710,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
                  static_cast<long long>(contentLength),
                  static_cast<unsigned long>(pendingUpdate.size));
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::DownloadFailed);
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -617,6 +718,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
     if (updatePartition == nullptr) {
         ESP_LOGE(TAG, "No OTA update partition found");
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::BeginFailed);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -630,6 +732,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to begin OTA update: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::BeginFailed);
         return err;
     }
 
@@ -638,6 +741,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
         ESP_LOGE(TAG, "Failed to initialize PSA Crypto");
         esp_ota_abort(otaHandle);
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::IntegrityFailed);
         return ESP_FAIL;
     }
     psa_hash_operation_t hashOp = PSA_HASH_OPERATION_INIT;
@@ -645,8 +749,12 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
         ESP_LOGE(TAG, "Failed to initialize SHA-256 context");
         esp_ota_abort(otaHandle);
         esp_http_client_cleanup(client);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::IntegrityFailed);
         return ESP_FAIL;
     }
+
+    transmitEvent(OtamaticClientEvent::UpdateStarted, OtamaticClientError::None, 0,
+                  pendingUpdate.version, pendingUpdate.size);
 
     uint8_t buffer[1024];
     uint32_t written = 0;
@@ -660,6 +768,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
             ESP_LOGE(TAG, "Firmware download read error after %lu bytes",
                      static_cast<unsigned long>(written));
             downloadFailed = true;
+            transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::DownloadFailed);
             break;
         }
         if (read == 0) {
@@ -669,6 +778,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
                          static_cast<unsigned long>(written),
                          static_cast<unsigned long>(pendingUpdate.size));
                 downloadFailed = true;
+                transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::DownloadFailed);
                 break;
             }
             if ((uint32_t)((xTaskGetTickCount() - stallStart) * portTICK_PERIOD_MS) > kDownloadStallTimeoutMs) {
@@ -676,6 +786,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
                          static_cast<unsigned long>(written),
                          static_cast<unsigned long>(pendingUpdate.size));
                 downloadFailed = true;
+                transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::DownloadFailed);
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -687,12 +798,14 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to write firmware to flash: %s", esp_err_to_name(err));
             downloadFailed = true;
+            transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::WriteFailed);
             break;
         }
 
         if (psa_hash_update(&hashOp, buffer, static_cast<size_t>(read)) != PSA_SUCCESS) {
             ESP_LOGE(TAG, "Failed to update SHA-256 context");
             downloadFailed = true;
+            transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::IntegrityFailed);
             break;
         }
         written += static_cast<uint32_t>(read);
@@ -702,6 +815,8 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
             lastProgress = progress;
             ESP_LOGD(TAG, "Update progress: %d%% (%lu bytes)", progress,
                      static_cast<unsigned long>(written));
+            transmitEvent(OtamaticClientEvent::UpdateProgress, OtamaticClientError::None,
+                          static_cast<uint8_t>(progress), pendingUpdate.version);
         }
     }
 
@@ -716,6 +831,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
             ESP_LOGE(TAG, "Firmware size mismatch after download (received %lu/%lu bytes)",
                      static_cast<unsigned long>(written),
                      static_cast<unsigned long>(pendingUpdate.size));
+            transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::DownloadFailed);
         }
         return ESP_ERR_INVALID_SIZE;
     }
@@ -727,6 +843,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
         psa_hash_abort(&hashOp);
         esp_ota_abort(otaHandle);
         ESP_LOGE(TAG, "Failed to finalize SHA-256 context");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::IntegrityFailed);
         return ESP_FAIL;
     }
 
@@ -738,6 +855,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
         ESP_LOGE(TAG, "Firmware integrity check failed (expected %s, computed %s)",
                  pendingUpdate.integrity, digestHex);
         esp_ota_abort(otaHandle);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::IntegrityFailed);
         return ESP_ERR_INVALID_CRC;
     }
     ESP_LOGD(TAG, "Firmware integrity check passed");
@@ -750,6 +868,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
         if (!verifyFirmwareSignature(pendingUpdate.signature, publicKey, digest)) {
             ESP_LOGE(TAG, "Firmware signature verification failed");
             esp_ota_abort(otaHandle);
+            transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::SignatureFailed);
             return ESP_ERR_INVALID_CRC;
         }
         ESP_LOGD(TAG, "Firmware signature check passed");
@@ -757,6 +876,7 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
         ESP_LOGE(TAG, "Signed updates are required but %s, aborting update",
                  hasSignature ? "no public key is configured" : "the update has no signature");
         esp_ota_abort(otaHandle);
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::SignatureFailed);
         return ESP_ERR_INVALID_STATE;
     } else if (hasSignature) {
         ESP_LOGW(TAG, "Update is signed but no public key is configured, skipping signature verification");
@@ -765,17 +885,22 @@ esp_err_t OtamaticClient::applyUpdateInternal() {
     err = esp_ota_end(otaHandle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to finalize OTA update: %s", esp_err_to_name(err));
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::EndFailed);
         return err;
     }
 
     err = esp_ota_set_boot_partition(updatePartition);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set boot partition: %s", esp_err_to_name(err));
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::EndFailed);
         return err;
     }
 
     ESP_LOGI(TAG, "Firmware version %lu installed successfully",
              static_cast<unsigned long>(pendingUpdate.version));
+
+    transmitEvent(OtamaticClientEvent::UpdateCompleted, OtamaticClientError::None, 0,
+                  pendingUpdate.version, pendingUpdate.size);
 
     if (this->config.autoRestartEnabled) {
         ESP_LOGI(TAG, "Restarting to boot the new firmware");
