@@ -1,6 +1,7 @@
 #pragma once
 
-#include <otamatic/otamatic_client.hpp>
+#include <cstdint>
+#include <cstdio>
 #include <string>
 
 /**

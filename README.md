@@ -1,16 +1,15 @@
 # OtamaticClient
 
-OTA client for ESP32 with the Arduino framework.
+OTA client for ESP32 — works with both the **Arduino framework** and plain **ESP-IDF** projects.
 
 Managed OTA updates through the Otamatic platform: the device periodically
 checks for a new firmware version and, when available, downloads and
 installs it automatically.
 
-- Works over any Arduino `Client` (Wi-Fi, Ethernet, GSM — HTTP or HTTPS)
+- HTTPS connectivity through the ESP-IDF HTTP client (Wi-Fi, Ethernet, GSM — anything with a TCP/IP stack)
 - Automatic periodic checks with integrity verification (SHA-256)
 - Optional firmware signature verification (ECDSA P-256)
 - Rollback protection with post-reboot verification
-- Local update portal for manual uploads from a browser
 - Event-based API to observe the update lifecycle
 
 ## The Otamatic platform
@@ -29,7 +28,9 @@ It offers advanced features, including:
 
 ## Requirements
 
-- ESP32 board with the Arduino framework
+- ESP32 board with the Arduino framework (**arduino-esp32 core 3.x or later**)
+  or a plain ESP-IDF project (ESP-IDF >= 5.1)
+- An OTA-compatible partition scheme (two app slots, e.g. `ota_0`/`ota_1`)
 - Network connectivity (Wi-Fi, Ethernet, or GSM)
 
 ## Installation
@@ -51,7 +52,7 @@ Add it to the `lib_deps` section of your `platformio.ini`:
 [env:esp32dev]
 platform = espressif32
 framework = arduino
-lib_deps = timothyfran/OtamaticClient @ ^0.4.0
+lib_deps = timothyfran/OtamaticClient @ ^1.0.0
 ```
 
 or install it from the PlatformIO Home → **Libraries** panel by searching for
@@ -59,36 +60,44 @@ or install it from the PlatformIO Home → **Libraries** panel by searching for
 
 ## Usage
 
-OtamaticClient is transport agnostic: it implements plain HTTP/1.1 on top of any `Client` implementation, so it works over Wi-Fi, Ethernet, GSM, in both HTTP and HTTPS (depending on the client class you pass in).
-The transport is attached with `setClient()` and can be re-bound at runtime (e.g. after a network change) without losing any configuration.
+The client embeds the ESP-IDF HTTP client (available both in the Arduino core
+and in plain ESP-IDF) and talks to the Otamatic API over HTTPS, with certificate
+validation through the mbedTLS root store. Wi-Fi, Ethernet or GSM are all fine:
+whatever brings a TCP/IP stack up before `begin()` works.
 
 ```cpp
 #include <Arduino.h>
 #include <OtamaticClient.h>
 #include <WiFi.h>
 
-#define FIRMWARE_VERSION 1
-
-WiFiClient httpClient;               // HTTP over Wi-Fi
-// WiFiClientSecure httpClient;      // HTTPS over Wi-Fi (setCABundle/setInsecure)
-// EthernetClient httpClient;        // HTTP over Ethernet (Arduino Ethernet)
-// TinyGsmClient httpClient(modem);  // HTTP over GSM/LTE (TinyGSM)
-
 OtamaticClient ota;
 
 void setup() {
-    // ... connect your network first ...
-    ota.setClient(&httpClient);
-    ota.begin(FIRMWARE_VERSION, "your-otamatic-service-key");
+    WiFi.begin("your-ssid", "your-password");
+    while (WiFi.status() != WL_CONNECTED) delay(500);
+
+    // Sync the system clock: TLS certificate validation checks validity
+    // dates, otherwise every HTTPS connection fails.
+    configTime(0, 0, "pool.ntp.org");
+
+    OtamaticConfig config;
+    config.apiKey = "your-otamatic-service-key";
+    config.firmwareVersion = 1;              // monotonically increasing integer
+    config.versionName = "1.0.0";            // human-readable version
+
+    ota.begin(config);
 }
 
 void loop() {
-    ota.loop();
+    // Nothing to do: the client runs its own auto-check task.
 }
 ```
 
 That's it: the device now checks for updates every 5 minutes and applies
-them automatically (rebooting when done).
+them automatically (rebooting when done). See
+[`src/otamatic/otamatic_config.hpp`](src/otamatic/otamatic_config.hpp) for all
+the available options (check interval, signed updates, rollback verification,
+failed-version guard, manual mode, ...).
 
 ## Events
 
@@ -117,7 +126,7 @@ void onOtaEvent(const OtamaticClientEventData& event) {
 void setup() {
     // ...
     ota.onEvent(onOtaEvent);
-    ota.begin(FIRMWARE_VERSION, "your-otamatic-service-key");
+    ota.begin(config);
 }
 ```
 
@@ -146,11 +155,9 @@ Event and error codes are plain enums (`OtamaticClientEvent`,
 
 - Create your account on the [Otamatic platform](https://www.otamatic.eu) — in under 5 minutes.
 - Browse the [examples](examples/) to go further:
-  - [WiFiBasic](examples/WiFiBasic/WiFiBasic.ino) — basic setup with event logging
-  - [SignatureExample](examples/SignatureExample/SignatureExample.ino) — firmware signature verification
-  - [AdvancedExample](examples/AdvancedExample/AdvancedExample.ino) — manual update and restart control
-  - [PortalExample](examples/PortalExample/PortalExample.ino) — local update portal for manual uploads
-- See the `src/*.h` headers and the [extras](extras/) folder for the full API documentation.
+  - [basic_example (Arduino)](examples/arduino/basic_example/basic_example.ino) — basic setup with event logging
+  - [basic_example (ESP-IDF)](examples/esp-idf/basic_example/) — the same example as a plain ESP-IDF project
+- See the `src/OtamaticClient.h` header and the [extras](extras/) folder for the full API documentation.
 - Planning a self-hosted server? See [docs/API.md](docs/API.md) for the HTTP API specification.
 
 ## License

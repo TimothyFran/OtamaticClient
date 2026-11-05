@@ -1,3 +1,11 @@
+// On the Arduino framework this header must come first: it declares
+// `extern const IPAddress INADDR_NONE;` before lwip (pulled in by
+// esp_http_client.h below) defines INADDR_NONE as a macro, which would
+// otherwise break the declaration. Plain ESP-IDF builds skip this include.
+#if __has_include(<Arduino.h>)
+  #include <Arduino.h>
+#endif
+
 #include <otamatic/otamatic_client.hpp>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
@@ -11,7 +19,9 @@
 #include <cstring>
 #include <strings.h>
 
-static const char* TAG = "otamatic_client";
+// 'unused' attribute: with CORE_DEBUG_LEVEL=0 (Arduino default) the ESP_LOGx
+// macros compile to nothing, so TAG would be flagged as unused.
+static const char* TAG __attribute__((unused)) = "otamatic_client";
 
 // Network timeout for the update-check HTTP request (the TLS handshake alone
 // can take a few seconds on a slow link).

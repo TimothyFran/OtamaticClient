@@ -7,14 +7,12 @@ idf_component_register(
     SRCS
         "src/otamatic_client.cpp"
     INCLUDE_DIRS
-        "include"
+        "src"
     REQUIRES
         esp_common
         app_update
-        esp_wifi
         esp_http_client
-        esp_https_ota
+        esp_hw_support
         mbedtls
         log
-        nvs_flash
 )
