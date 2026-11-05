@@ -1,0 +1,19 @@
+# Abilita il certificate bundle mbedTLS (root store Mozilla, ~150 CA pubbliche)
+# per la verifica dei certificati server durante le connessioni HTTPS.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# Rilevamento stack overflow: con il watchpoint di fine stack un overflow viene
+# bloccato subito (panic esplicito) invece di corrompere silenziosamente l'heap
+# e causare crash "misteriosi" dentro malloc/free.
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
+# Tabella partizioni OTA: due slot app (ota_0/ota_1) piu' la partizione
+# otadata, gestiti da partitions.csv nella root del progetto. Senza partizione
+# factory il bootloader avvia ota_0 quando otadata e' vuota.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Flash della scheda: modulo ESP32 con 4MB (il default IDF e' 2MB).
+# Gli slot OTA richiedono almeno 4MB: il firmware (~1MB) deve stare due volte.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
