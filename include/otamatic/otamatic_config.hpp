@@ -46,11 +46,15 @@ struct OtamaticConfig {
     /// If true, only accepts updates signed/certified by the server.
     bool requireSignedUpdates = false;
 
+    /// Public key (PEM "-----BEGIN PUBLIC KEY-----" or base64/raw DER, ECDSA P-256)
+    /// used to verify the firmware signature. Required when requireSignedUpdates is true.
+    const char* publicKey = nullptr;
+
     /// If true, enables automatic periodic update checks
     bool enableAutoCheckMode = true;
 
-    /// Size of the task stack for the automatic update check task. Default: 4096.
-    uint32_t autoCheckTaskStackSize = 4096;
+    /// Size of the task stack for the automatic update check task. Default: 10240.
+    uint32_t autoCheckTaskStackSize = 10240;
 
 
     /// Serializes the configuration to JSON.
