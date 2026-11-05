@@ -18,6 +18,9 @@
 #define EXAMPLE_ESP_WIFI_PASS       "your-password"
 #define EXAMPLE_ESP_MAXIMUM_RETRY   5
 
+#define FIRMWARE_VERSION            1
+#define FIRMWARE_VERSION_NAME       "1.0.0"
+
 #define WIFI_CONNECTED_BIT          BIT0
 #define WIFI_FAIL_BIT               BIT1
 
@@ -116,9 +119,9 @@ extern "C" void app_main()
         ESP_LOGE(TAG, "failed to connect to SSID:%s", EXAMPLE_ESP_WIFI_SSID);
     }
 
-    // Sincronizzazione dell'orologio di sistema: la verifica dei certificati
-    // TLS controlla le date di validita', altrimenti ogni certificato risulta
-    // "not yet valid" e la connessione HTTPS fallisce.
+    // System clock synchronization: TLS certificate validation checks the
+    // validity dates, otherwise every certificate results "not yet valid"
+    // and the HTTPS connection fails.
     esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     esp_netif_sntp_init(&sntp_config);
     if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(15000)) != ESP_OK) {
@@ -132,9 +135,8 @@ extern "C" void app_main()
     
     // Client Configuration
     config.apiKey = OTAMATIC_API_KEY;
-    config.firmwareVersion = 8;
-    config.versionName = "1.0.2+AAAAAA";
-    config.checkInterval = 5000;
+    config.firmwareVersion = FIRMWARE_VERSION;
+    config.versionName = FIRMWARE_VERSION_NAME;
 
     // Event callback registration
     client.onEvent(onOtaEvent);
