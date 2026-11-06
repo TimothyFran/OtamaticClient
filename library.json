@@ -1,7 +1,7 @@
 {
     "name": "OtamaticClient",
     "version": "1.0.0",
-    "description": "Client OTA (Over-The-Air) per ESP32 con framework Arduino.",
+    "description": "Managed OTA updates for ESP32 through the Otamatic platform, for the Arduino framework and plain ESP-IDF.",
     "keywords": "ota, update, firmware, esp32, wireless",
     "license": "BUSL-1.1",
     "homepage": "https://github.com/TimothyFran/OtamaticClient",
@@ -16,7 +16,7 @@
             "maintainer": true
         }
     ],
-    "frameworks": "arduino",
+    "frameworks": ["arduino", "espidf"],
     "platforms": "espressif32",
     "dependencies": [
         {
@@ -24,5 +24,18 @@
             "name": "ArduinoJson",
             "version": "^7.0.0"
         }
-    ]
+    ],
+    "export": {
+        "exclude": [
+            ".github",
+            ".vscode",
+            ".clinerules",
+            "context7.json",
+            "build",
+            "examples/esp-idf/*/build",
+            "examples/esp-idf/*/managed_components",
+            "examples/esp-idf/*/sdkconfig",
+            "examples/esp-idf/*/dependencies.lock"
+        ]
+    }
 }
