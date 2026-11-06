@@ -1,52 +1,53 @@
+<div align="center">
+
 # OtamaticClient
 
-OTA client for ESP32 — works with both the **Arduino framework** and plain **ESP-IDF** projects.
+**Managed OTA updates for ESP32 — Arduino framework and plain ESP-IDF.**
 
-Managed OTA updates through the Otamatic platform: the device periodically
-checks for a new firmware version and, when available, downloads and
-installs it automatically.
+[![Arduino Library](https://img.shields.io/badge/Arduino-Library_Manager-00878F?logo=arduino&logoColor=white)](https://docs.arduino.cc/libraries/otamaticclient/)
+[![PlatformIO](https://img.shields.io/badge/PlatformIO-Library-1372D3?logo=platformio&logoColor=white)](https://registry.platformio.org/libraries/timothyfran/OtamaticClient)
+[![MCU](https://img.shields.io/badge/MCU-ESP32-E7352C?logo=espressif&logoColor=white)](https://www.espressif.com/)
+[![License](https://img.shields.io/badge/License-BUSL--1.1-blue.svg)](LICENSE)
 
-- HTTPS connectivity through the ESP-IDF HTTP client (Wi-Fi, Ethernet, GSM — anything with a TCP/IP stack)
-- Automatic periodic checks with integrity verification (SHA-256)
-- Optional firmware signature verification (ECDSA P-256)
-- Rollback protection with post-reboot verification
-- Event-based API to observe the update lifecycle
+[Examples](examples/) · [Requirements](#requirements) · [Install](#installation) · [Configure](#configuration) · [Self-hosted API](docs/API.md)
 
-## The Otamatic platform
+</div>
 
-Devices can be easily managed through the **[Otamatic](https://www.otamatic.eu)** platform at
-[www.otamatic.eu](https://www.otamatic.eu), which lets you set up and manage your
-devices fleet in **less than 5 minutes**.
+Your device periodically checks the **[Otamatic](https://www.otamatic.eu)** platform,
+downloads the new firmware over HTTPS and installs it — safely.
 
-It offers advanced features, including:
+- 🌐 **Any network** — Wi-Fi, Ethernet, GSM… anything with a TCP/IP stack
+- 🔒 **Secure by default** — HTTPS with certificate validation, SHA-256 integrity checks, optional ECDSA P-256 firmware signatures
+- ↩️ **Rollback protection** — the new firmware must prove itself at boot, or it is rolled back automatically
+- 🎛️ **You're in control** — fully automatic or fully manual lifecycle, with an event callback for every step
 
-- Multiple codebases
-- Release channels
-- Scheduled releases
-- Staged rollout releases
-- Release monitoring
+> **[Create your account on otamatic.eu](https://www.otamatic.eu)** and manage your device fleet —
+> multiple codebases, release channels, scheduled and staged-rollout releases — in **under 5 minutes**.
+
+---
 
 ## Requirements
 
-- ESP32 board with the Arduino framework (**arduino-esp32 core 3.x or later**)
-  or a plain ESP-IDF project (ESP-IDF >= 5.1)
-- An OTA-compatible partition scheme (two app slots, e.g. `ota_0`/`ota_1`)
-- Network connectivity (Wi-Fi, Ethernet, or GSM)
+- An **ESP32** board with either:
+  - the **Arduino framework** (arduino-esp32 core **3.x or later**), or
+  - a plain **ESP-IDF** project (**≥ 5.1**)
+- An **OTA-compatible partition scheme** (two app slots, e.g. `ota_0` / `ota_1`)
+- **Network connectivity** brought up before starting the client
+- A **synchronized clock** — TLS validates certificate dates, so without a time source (NTP, SNTP, GPS…) every HTTPS connection fails
+
+> 💡 The dependency on [ArduinoJson](https://arduinojson.org) is declared in the library
+> manifests and is resolved automatically by every supported toolchain.
 
 ## Installation
 
-OtamaticClient is available both in the **Arduino Library Manager** and in the
-**PlatformIO Library Registry**.
-
 ### Arduino IDE
 
-Open **Sketch → Include Library → Manage Libraries...**, search for
-**OtamaticClient** by *Timothy Franceschi (TimothyFran)* and click
-**Install** (with the latest version selected).
+**Sketch → Include Library → Manage Libraries…** → search **OtamaticClient** by
+*Timothy Franceschi (TimothyFran)* → **Install**.
 
 ### PlatformIO
 
-Add it to the `lib_deps` section of your `platformio.ini`:
+Add it to `lib_deps` in your `platformio.ini`:
 
 ```ini
 [env:esp32dev]
@@ -55,37 +56,44 @@ framework = arduino
 lib_deps = timothyfran/OtamaticClient @ ^1.0.0
 ```
 
-or install it from the PlatformIO Home → **Libraries** panel by searching for
-**OtamaticClient**.
+### ESP-IDF (component)
 
-## Usage
+Add the library as an external component in your project's root `CMakeLists.txt`:
 
-The client embeds the ESP-IDF HTTP client (available both in the Arduino core
-and in plain ESP-IDF) and talks to the Otamatic API over HTTPS, with certificate
-validation through the mbedTLS root store. Wi-Fi, Ethernet or GSM are all fine:
-whatever brings a TCP/IP stack up before `begin()` works.
+```cmake
+set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../OtamaticClient")
+```
+
+then require it from your `main` component:
+
+```cmake
+idf_component_register(SRCS "main.c" REQUIRES OtamaticClient ...)
+```
+
+Dropping the library folder into your project's `components/` directory works too.
+Either way, the ESP-IDF Component Manager pulls in ArduinoJson on the next build.
+
+## Quick start
+
+Once your network is up and the clock is synced, three steps are enough:
 
 ```cpp
-#include <Arduino.h>
-#include <OtamaticClient.h>
-#include <WiFi.h>
+#include <OtamaticClient.h>   // ESP-IDF: #include "otamatic/otamatic_client.hpp"
 
-OtamaticClient ota;
+OtamaticClient client;
 
 void setup() {
-    WiFi.begin("your-ssid", "your-password");
-    while (WiFi.status() != WL_CONNECTED) delay(500);
+    // 1. Connect your network (Wi-Fi / Ethernet / GSM) and sync the clock.
 
-    // Sync the system clock: TLS certificate validation checks validity
-    // dates, otherwise every HTTPS connection fails.
-    configTime(0, 0, "pool.ntp.org");
-
+    // 2. Configure the client
     OtamaticConfig config;
     config.apiKey = "your-otamatic-service-key";
-    config.firmwareVersion = 1;              // monotonically increasing integer
-    config.versionName = "1.0.0";            // human-readable version
+    config.firmwareVersion = 1;        // monotonically increasing integer
+    config.versionName = "1.0.0";      // human-readable version
+    client.begin(config);              // first update check runs immediately
 
-    ota.begin(config);
+    // 3. (Optional) observe the update lifecycle
+    client.onEvent(onOtaEvent);
 }
 
 void loop() {
@@ -93,78 +101,114 @@ void loop() {
 }
 ```
 
-That's it: the device now checks for updates every 5 minutes and applies
-them automatically (rebooting when done). See
-[`src/otamatic/otamatic_config.hpp`](src/otamatic/otamatic_config.hpp) for all
-the available options (check interval, signed updates, rollback verification,
-failed-version guard, manual mode, ...).
+That's all the integration code you need. For complete, working setups —
+network bring-up, NTP sync, event logging, manual update control — pick one of
+the [examples](examples/) and adapt it.
 
-## Events
+## Configuration
 
-The client reports every step of the update lifecycle through a callback, so
-your sketch can react (log, drive LEDs, notify a server, ...). Each event
-carries typed data: an error code for failures, the progress percentage
-during the download, and the firmware version/size involved.
+Every knob lives in [`OtamaticConfig`](src/otamatic/otamatic_config.hpp).
+Only `apiKey` is mandatory; everything else has a sensible default.
 
-```cpp
-void onOtaEvent(const OtamaticClientEventData& event) {
-    switch (event.event) {
-        case OtamaticClientEvent::UpdateProgress:
-            Serial.printf("Downloading: %u%%\n", event.progress);
-            break;
-        case OtamaticClientEvent::OperationFailed:
-            Serial.printf("OTA failed: %s\n", OtamaticClient::getErrorName(event.error));
-            break;
-        default:
-            Serial.printf("OTA event: %s (version %lu)\n",
-                          OtamaticClient::getEventName(event.event),
-                          (unsigned long)event.version);
-            break;
-    }
-}
+| Option | Default | What it does |
+|---|---|---|
+| `apiKey` | — | Service key of your Otamatic account (**required**) |
+| `firmwareVersion` | `0` | Version of the running firmware, compared against the server's |
+| `versionName` | `nullptr` | Human-readable version (e.g. `"1.0.0"`), reported to the platform |
+| `deviceId` | `0` | Unique device identifier; when `0`, it is derived from the MAC address |
+| `apiBaseUrl` | `https://otamatic.eu/api` | API endpoint — change only for self-hosted servers |
+| `checkInterval` | `300000` | Milliseconds between update checks (first check runs at `begin()`) |
+| `enableAutoCheckMode` | `true` | Start the auto-check task at `begin()`. Set `false` for fully manual operation |
+| `autoUpdateEnabled` | `true` | When a new version is found, download and install it without asking |
+| `autoRestartEnabled` | `true` | Restart the device once an update is installed |
+| `rollbackVerificationEnabled` | `true` | Confirm the new firmware at boot, with automatic rollback on failure |
+| `failedVersionGuardEnabled` | `true` | Keep skipping a version that already failed, to avoid update loops |
+| `maxUpdateFailedAttempts` | `3` | Failed attempts before the guard blocks a version |
+| `requireSignedUpdates` | `false` | Accept only firmware signed by the server |
+| `publicKey` | `nullptr` | ECDSA P-256 public key (PEM or base64/DER) used to verify signatures |
+| `autoCheckTaskStackSize` | `10240` | Stack size (bytes) of the auto-check task |
 
-void setup() {
-    // ...
-    ota.onEvent(onOtaEvent);
-    ota.begin(config);
-}
-```
+## How updates work
 
-If you need to forward a context (e.g. a class instance), register the
-callback with a user pointer:
+**Automatic mode** *(default)* — `begin()` starts a background task that checks
+for updates every `checkInterval`, downloads what it finds, installs it and
+restarts the device. You never touch it again.
 
-```cpp
-void onOtaEventEx(const OtamaticClientEventData& event, void* userData) {
-    MyClass* self = static_cast<MyClass*>(userData);
-    self->handleOtaEvent(event);
-}
+**Manual mode** — disable `enableAutoCheckMode`, `autoUpdateEnabled` and/or
+`autoRestartEnabled`, then drive the lifecycle yourself with `checkForUpdate()`
+and `applyUpdate()`: download when the device is idle, restart when it suits you.
 
-// ...
-ota.onEvent(onOtaEventEx, &myInstance);
-```
+**One operation at a time** — the client serializes its operations. A manual
+call while another operation (e.g. the auto-check) is running fails with the
+`Busy` error — simply retry later — and the auto-check skips its cycle while a
+manual operation is in progress.
 
-The callback runs synchronously in the context of the task that generated the
-event (the auto-check task or the caller of `checkForUpdate()`/`applyUpdate()`):
-keep it short and do not call back into the client from inside it.
+### Events
 
-Event and error codes are plain enums (`OtamaticClientEvent`,
-`OtamaticClientError`); `OtamaticClient::getEventName()` and
-`OtamaticClient::getErrorName()` turn them into human-readable strings.
+Register a callback with `onEvent()` to follow every step. The callback runs
+synchronously in the context of the task that generated the event: keep it
+short and don't call back into the client from inside it. A second overload,
+`onEvent(callback, userData)`, forwards a context pointer for use with classes.
 
-## Next steps
+| Event | Fired when |
+|---|---|
+| `CheckingForUpdate` | A new update check starts |
+| `UpdateAvailable` | A newer firmware is available (carries version and size) |
+| `UpdateNotNeeded` | The device already runs the latest version |
+| `UpdateIgnored` | The update was skipped by the failed-version guard |
+| `UpdateStarted` | The firmware download has started |
+| `UpdateProgress` | Download progress (0–100 in `event.progress`) |
+| `UpdateCompleted` | The firmware was downloaded, verified and installed |
+| `UpdateConfirmed` | The new firmware was confirmed at boot (rollback cancelled) |
+| `UpdateRolledBack` | Post-boot verification failed and the device rolled back |
+| `OperationFailed` | An operation failed (error code in `event.error`) |
 
-- Create your account on the [Otamatic platform](https://www.otamatic.eu) — in under 5 minutes.
-- Browse the [examples](examples/) to go further:
-  - [basic_example (Arduino)](examples/arduino/basic_example/basic_example.ino) — basic setup with event logging
-  - [basic_example (ESP-IDF)](examples/esp-idf/basic_example/) — the same example as a plain ESP-IDF project
-- See the `src/OtamaticClient.h` header and the [extras](extras/) folder for the full API documentation.
-- Planning a self-hosted server? See [docs/API.md](docs/API.md) for the HTTP API specification.
+<details>
+<summary><b>Error codes</b> (carried by <code>OperationFailed</code> events)</summary>
+
+| Code | Meaning |
+|---|---|
+| `ConfigInvalid` | Invalid or incomplete configuration |
+| `ConnectionFailed` | The HTTP connection could not be established |
+| `HttpFailed` | The server answered with a non-200 status |
+| `InvalidCheckData` | The check response is missing fields or malformed |
+| `InvalidFirmware` | The advertised image is invalid (bad size, doesn't fit the partition) |
+| `BeginFailed` | The OTA update could not be started |
+| `DownloadFailed` | The download failed (connection dropped, stalled, size mismatch) |
+| `WriteFailed` | The firmware could not be written to flash |
+| `EndFailed` | The update could not be finalized (partition switch failed) |
+| `IntegrityFailed` | The SHA-256 integrity verification failed |
+| `SignatureFailed` | The firmware signature is missing or invalid |
+| `InvalidImage` | The firmware image is not a valid app image |
+| `VerificationFailed` | The post-boot firmware verification failed |
+| `Busy` | Another operation is already in progress |
+
+`OtamaticClient::getEventName()` and `OtamaticClient::getErrorName()` turn
+these enums into human-readable strings.
+
+</details>
+
+## Examples
+
+The [examples](examples/) folder is the reference for concrete implementations —
+start from the one closest to your use case:
+
+| Example | Shows |
+|---|---|
+| [`basic_example` (Arduino)](examples/arduino/basic_example/) | Minimal setup with event logging |
+| [`basic_example` (ESP-IDF)](examples/esp-idf/basic_example/) | The same as a plain ESP-IDF project |
+| [`advanced_example` (Arduino)](examples/arduino/advanced_example/) | Manual update & restart control, custom `deviceId`, 60 s check interval |
+| [`advanced_example` (ESP-IDF)](examples/esp-idf/advanced_example/) | The same as a plain ESP-IDF project |
+
+## Reference
+
+- Full API: the [`src/OtamaticClient.h`](src/OtamaticClient.h) header and its includes
+- Self-hosting the server: the HTTP API specification in [docs/API.md](docs/API.md)
+- Manual firmware upload page (optional, host it anywhere): [extras/index.html](extras/index.html)
 
 ## License
 
-This project is licensed under the **Business Source License 1.1** (SPDX: `BUSL-1.1`) — see the [LICENSE](LICENSE) file.
-
-### The short version
+Licensed under the **Business Source License 1.1** (SPDX: `BUSL-1.1`) — see the [LICENSE](LICENSE) file.
 
 **You CAN**
 
@@ -181,7 +225,7 @@ This project is licensed under the **Business Source License 1.1** (SPDX: `BUSL-
 - ✗ Embed OtamaticClient inside your product and sell access to it as a managed OTA platform
 - ✗ Resell OtamaticClient as a managed OTA platform
 
-These restrictions only apply if you are competing directly with the Licensor's own managed OTA offering. If in doubt, contact us.
+These restrictions only apply if you are competing directly with the Licensor's
+own managed OTA offering. If in doubt, contact us.
 
-For commercial licensing, contact the Licensor: **Timothy Franceschi <timothy@franceschi.es>**.
-
+For commercial competitor licensing, contact the Licensor: **Timothy Franceschi &lt;timothy@franceschi.es&gt;**.
