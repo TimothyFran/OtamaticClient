@@ -299,13 +299,19 @@ OtamaticClient::~OtamaticClient() {
 }
 
 bool OtamaticClient::begin(const OtamaticConfig& config) {
-    if (config.apiKey == nullptr || config.apiBaseUrl == nullptr) {
+    this->config = config;
+
+    // First boot after an update: the freshly installed firmware is awaiting
+    // confirmation. Run the post-boot verification before anything else, so the
+    // new firmware is confirmed (or rolled back to the previous one) before any
+    // other activity can depend on it.
+    runBootVerification();
+
+    if (this->config.apiKey == nullptr || this->config.apiBaseUrl == nullptr) {
         ESP_LOGE(TAG, "Invalid configuration: apiKey and apiBaseUrl are required");
         transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::ConfigInvalid);
         return false;
     }
-
-    this->config = config;
 
     if (this->config.deviceId == 0) {
         uint8_t mac[6] = {0};
@@ -332,6 +338,68 @@ bool OtamaticClient::begin(const OtamaticConfig& config) {
 void OtamaticClient::deinit() {
     ESP_LOGI(TAG, "Deinitializing Otamatic client");
     stopAutoCheck();
+}
+
+void OtamaticClient::runBootVerification() {
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (running == nullptr) {
+        ESP_LOGW(TAG, "Cannot determine the running partition: post-boot verification skipped");
+        return;
+    }
+
+    esp_ota_img_states_t state;
+    if (esp_ota_get_state_partition(running, &state) != ESP_OK) {
+        ESP_LOGD(TAG, "Running partition has no OTA state: post-boot verification skipped");
+        return;
+    }
+
+    // ESP_OTA_IMG_PENDING_VERIFY means the running firmware was just installed
+    // and is booting for the first time: it must be confirmed, otherwise the
+    // bootloader rolls back to the previous version at the next reboot. On any
+    // other state this is a regular boot and there is nothing to verify.
+    // Note: the state is only used when the bootloader was built with
+    // application rollback enabled (see the README, "Post-boot verification").
+    if (state != ESP_OTA_IMG_PENDING_VERIFY) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "First boot after the update: firmware version %lu awaits confirmation",
+             static_cast<unsigned long>(this->config.firmwareVersion));
+
+    bool verified = true;
+    if (this->config.rollbackVerificationEnabled) {
+        if (this->updateVerifier != nullptr) {
+            verified = this->updateVerifier();
+        } else if (this->updateVerifierEx != nullptr) {
+            verified = this->updateVerifierEx(this->updateVerifierUserData);
+        } else {
+            // No verification callback registered: the update is considered
+            // successful and the new firmware is confirmed as is.
+            ESP_LOGD(TAG, "No update verification callback registered: confirming the new firmware");
+        }
+    } else {
+        ESP_LOGD(TAG, "Rollback verification is disabled: confirming the new firmware");
+    }
+
+    if (verified) {
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        if (err != ESP_OK) {
+            // Without the confirmation the bootloader will roll back at the
+            // next reboot: report the failure loudly.
+            ESP_LOGE(TAG, "Failed to confirm the new firmware: %s", esp_err_to_name(err));
+            return;
+        }
+        ESP_LOGI(TAG, "New firmware confirmed (rollback cancelled)");
+        transmitEvent(OtamaticClientEvent::UpdateConfirmed, OtamaticClientError::None, 0,
+                      this->config.firmwareVersion);
+    } else {
+        ESP_LOGE(TAG, "Post-boot verification failed: rolling back to the previous version");
+        transmitEvent(OtamaticClientEvent::UpdateRolledBack, OtamaticClientError::VerificationFailed, 0,
+                      this->config.firmwareVersion);
+        // Marks the running firmware invalid and restarts into the previous one.
+        // Never returns.
+        esp_ota_mark_app_invalid_rollback_and_reboot();
+    }
 }
 
 bool OtamaticClient::startAutoCheck() {
@@ -418,6 +486,22 @@ void OtamaticClient::onEvent(OtamaticClientEventCallbackEx callback, void* userD
     this->eventUserData = callback != nullptr ? userData : nullptr;
     if (callback != nullptr) {
         this->eventCallback = nullptr;
+    }
+}
+
+void OtamaticClient::onUpdateVerification(OtamaticUpdateVerifierCallback callback) {
+    this->updateVerifier = callback;
+    if (callback != nullptr) {
+        this->updateVerifierEx = nullptr;
+        this->updateVerifierUserData = nullptr;
+    }
+}
+
+void OtamaticClient::onUpdateVerification(OtamaticUpdateVerifierCallbackEx callback, void* userData) {
+    this->updateVerifierEx = callback;
+    this->updateVerifierUserData = callback != nullptr ? userData : nullptr;
+    if (callback != nullptr) {
+        this->updateVerifier = nullptr;
     }
 }
 

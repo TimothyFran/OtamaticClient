@@ -73,7 +73,8 @@ enum class OtamaticClientError : uint8_t {
  * @brief Data passed to the event callback.
  *
  * Fields are meaningful depending on the event type:
- * - error:    set for OtamaticClientEvent::OperationFailed.
+ * - error:    set for OtamaticClientEvent::OperationFailed and for
+ *             OtamaticClientEvent::UpdateRolledBack (VerificationFailed).
  * - progress: set for OtamaticClientEvent::UpdateProgress (0-100).
  * - version:  firmware version related to the event.
  * - size:     firmware image size (UpdateAvailable / UpdateStarted).

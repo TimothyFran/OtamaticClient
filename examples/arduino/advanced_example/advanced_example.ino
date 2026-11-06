@@ -15,6 +15,9 @@
  * - `checkInterval` is 60 seconds: the auto-check task runs a check every
  *   minute (the first check runs immediately at `begin()`).
  * - `deviceId` is a custom identifier instead of the MAC-derived default.
+ * - `verifyNewFirmware()` is the custom post-boot verification, run at boot on
+ *   the first boot after an update to decide between confirming the new
+ *   firmware and rolling back to the previous one.
  * - The client runs one update operation at a time: `checkForUpdate()` and
  *   `applyUpdate()` fail with the `Busy` error while the auto-check is
  *   mid-cycle (just retry later), and the auto-check skips its cycle while a
@@ -58,6 +61,15 @@ volatile bool restartRequested = false;
 volatile uint32_t pendingVersion = 0;
 volatile uint32_t pendingSize = 0;
 
+// Custom post-boot verification: runs at boot on the first boot after an
+// update (only when rollbackVerificationEnabled is true). Return true to
+// confirm the new firmware, false to roll back to the previous one.
+bool verifyNewFirmware() {
+    Serial.println("Running post-boot verification...");
+    // Insert your self-tests here (peripherals, sensors, configuration...).
+    return true;
+}
+
 void onOtaEvent(const OtamaticClientEventData& event) {
     switch (event.event) {
         case OtamaticClientEvent::UpdateProgress:
@@ -89,9 +101,9 @@ void onOtaEvent(const OtamaticClientEventData& event) {
             break;
 
         case OtamaticClientEvent::UpdateRolledBack:
-            // Emitted at boot when the new firmware failed verification and
-            // the previous one has been restored automatically.
-            Serial.println("New firmware failed verification, rolled back");
+            // Emitted at boot when the new firmware failed verification: the
+            // rollback to the previous version starts right after this event.
+            Serial.println("New firmware failed verification, rolling back");
             break;
 
         case OtamaticClientEvent::OperationFailed:
@@ -160,6 +172,10 @@ void setup() {
 
     // Event callback registration
     client.onEvent(onOtaEvent);
+
+    // Custom post-boot verification callback (register before begin(): the
+    // verification runs inside begin() on the first boot after an update).
+    client.onUpdateVerification(verifyNewFirmware);
 
     // Initializing the client (starts the automatic update check task: the
     // first check runs immediately, then one every checkInterval)

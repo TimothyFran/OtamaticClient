@@ -90,10 +90,13 @@ void setup() {
     config.apiKey = "your-otamatic-service-key";
     config.firmwareVersion = 1;        // monotonically increasing integer
     config.versionName = "1.0.0";      // human-readable version
-    client.begin(config);              // first update check runs immediately
 
-    // 3. (Optional) observe the update lifecycle
+    // 3. (Optional) observe the update lifecycle — register callbacks before
+    //    begin(): boot-time events (post-boot verification) are delivered
+    //    during begin().
     client.onEvent(onOtaEvent);
+
+    client.begin(config);              // first update check runs immediately
 }
 
 void loop() {
@@ -121,7 +124,7 @@ Only `apiKey` is mandatory; everything else has a sensible default.
 | `enableAutoCheckMode` | `true` | Start the auto-check task at `begin()`. Set `false` for fully manual operation |
 | `autoUpdateEnabled` | `true` | When a new version is found, download and install it without asking |
 | `autoRestartEnabled` | `true` | Restart the device once an update is installed |
-| `rollbackVerificationEnabled` | `true` | Confirm the new firmware at boot, with automatic rollback on failure |
+| `rollbackVerificationEnabled` | `true` | Confirm the new firmware at boot, with automatic rollback on failure. Customise the check with [`onUpdateVerification()`](#post-boot-verification) |
 | `failedVersionGuardEnabled` | `true` | Keep skipping a version that already failed, to avoid update loops |
 | `maxUpdateFailedAttempts` | `3` | Failed attempts before the guard blocks a version |
 | `requireSignedUpdates` | `false` | Accept only firmware signed by the server |
@@ -142,6 +145,52 @@ and `applyUpdate()`: download when the device is idle, restart when it suits you
 call while another operation (e.g. the auto-check) is running fails with the
 `Busy` error — simply retry later — and the auto-check skips its cycle while a
 manual operation is in progress.
+
+### Post-boot verification
+
+With `rollbackVerificationEnabled` (the default) every freshly installed
+firmware must **prove itself at boot**: on the first boot after an update
+`begin()` runs your custom verification code before anything else. Register it
+with `onUpdateVerification()` **before** `begin()`:
+
+```cpp
+bool verifyNewFirmware() {
+    // Your self-tests: peripherals, sensors, stored configuration...
+    return selfTestPassed;   // true: confirm, false: roll back
+}
+
+client.onEvent(onOtaEvent);
+client.onUpdateVerification(verifyNewFirmware);  // also: (callback, userData)
+client.begin(config);
+```
+
+- The callback returns `true` to **confirm** the new firmware: the rollback is
+  cancelled and the `UpdateConfirmed` event is emitted.
+- The callback returns `false` to **roll back**: the `UpdateRolledBack` event is
+  emitted (`VerificationFailed`), then the device restarts into the previous
+  firmware.
+- **No callback registered → always considered successful**: the new firmware is
+  confirmed and no rollback can happen.
+- `rollbackVerificationEnabled = false` skips your code entirely: the firmware
+  is confirmed immediately.
+
+The verification runs only on the first boot after an update — regular boots do
+nothing — and requires a bootloader built with application rollback and
+application-controlled confirmation:
+
+| Framework | Required setting |
+|---|---|
+| Arduino-ESP32 core 3.x | Nothing to do: the official core ships a rollback-enabled bootloader |
+| ESP-IDF 5.x | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` |
+| ESP-IDF 6.x | `CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_BY_APP` — the `CONFIRM_ON_STARTUP` default confirms the app before `app_main`, so the verification callback would never run |
+
+The partition table must have two app slots + `otadata` (e.g. `ota_0`/`ota_1`).
+Rollback protection is implemented jointly by the bootloader and the
+application: on devices already in the field with a bootloader built *without*
+rollback support, the safety net is inactive until the bootloader is rebuilt
+and re-flashed. See the
+[`verification_example`](examples/esp-idf/verification_example/) for a
+complete, minimal setup.
 
 ### Events
 
@@ -197,6 +246,8 @@ start from the one closest to your use case:
 |---|---|
 | [`basic_example` (Arduino)](examples/arduino/basic_example/) | Minimal setup with event logging |
 | [`basic_example` (ESP-IDF)](examples/esp-idf/basic_example/) | The same as a plain ESP-IDF project |
+| [`verification_example` (Arduino)](examples/arduino/verification_example/) | Minimal post-boot verification: custom self-tests with rollback |
+| [`verification_example` (ESP-IDF)](examples/esp-idf/verification_example/) | The same as a plain ESP-IDF project (with the rollback sdkconfig) |
 | [`advanced_example` (Arduino)](examples/arduino/advanced_example/) | Manual update & restart control, custom `deviceId`, 60 s check interval |
 | [`advanced_example` (ESP-IDF)](examples/esp-idf/advanced_example/) | The same as a plain ESP-IDF project |
 

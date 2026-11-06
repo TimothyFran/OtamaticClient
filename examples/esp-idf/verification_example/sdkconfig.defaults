@@ -1,0 +1,16 @@
+# Tabella partizioni custom: due slot app OTA + otadata (vedi partitions.csv).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Rollback con conferma controllata dall'app: il firmware appena installato
+# deve confermarsi all'avvio (esp_ota_mark_app_valid_cancel_rollback, chiamato
+# da OtamaticClient al termine della verifica post-boot), altrimenti il
+# bootloader ripristina la versione precedente.
+#
+# ESP-IDF 5.x:
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+#
+# ESP-IDF 6.x: l'opzione sopra viene migrata automaticamente in
+# CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_BY_APP=y. Non lasciare il default
+# CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_ON_STARTUP=y: conferma l'app prima di
+# app_main e quindi il callback di verifica post-boot non verrebbe mai eseguito.

@@ -8,6 +8,8 @@ OtamaticClientEvent	KEYWORD1
 OtamaticClientError	KEYWORD1
 OtamaticClientEventData	KEYWORD1
 OtamaticUpdate	KEYWORD1
+OtamaticUpdateVerifierCallback	KEYWORD1
+OtamaticUpdateVerifierCallbackEx	KEYWORD1
 
 begin	KEYWORD2
 deinit	KEYWORD2
@@ -17,6 +19,7 @@ isAutoCheckRunning	KEYWORD2
 checkForUpdate	KEYWORD2
 applyUpdate	KEYWORD2
 onEvent	KEYWORD2
+onUpdateVerification	KEYWORD2
 getEventName	KEYWORD2
 getErrorName	KEYWORD2
 
