@@ -278,9 +278,24 @@ struct HttpJsonReader {
 
 
 OtamaticClient::OtamaticClient() {
+    // The operation lock is a binary semaphore used as an atomic test-and-set
+    // guard around every check/apply operation. A binary semaphore (unlike a
+    // FreeRTOS mutex) has no ownership semantics: it can also be released
+    // safely by stopAutoCheck() when the auto-check task is deleted mid-cycle.
+    this->operationLock = xSemaphoreCreateBinary();
+    if (this->operationLock != nullptr) {
+        xSemaphoreGive(this->operationLock);
+    } else {
+        ESP_LOGE(TAG, "Failed to create the operation lock: operations will be rejected");
+    }
 }
 
 OtamaticClient::~OtamaticClient() {
+    stopAutoCheck();
+    if (this->operationLock != nullptr) {
+        vSemaphoreDelete(this->operationLock);
+        this->operationLock = nullptr;
+    }
 }
 
 bool OtamaticClient::begin(const OtamaticConfig& config) {
@@ -320,6 +335,11 @@ void OtamaticClient::deinit() {
 }
 
 bool OtamaticClient::startAutoCheck() {
+    if (this->taskHandle != nullptr) {
+        ESP_LOGW(TAG, "Auto-check task is already running");
+        return true;
+    }
+
     uint32_t stackSize = this->config.autoCheckTaskStackSize;
 
     ESP_LOGI(TAG, "Starting auto-check task (check interval: %lu ms, stack size: %lu bytes)",
@@ -350,12 +370,39 @@ void OtamaticClient::stopAutoCheck() {
     }
 
     ESP_LOGI(TAG, "Stopping auto-check task");
+
+    // Take the operation lock so the task cannot start a new cycle while it is
+    // being deleted. If the lock is not available the task is in the middle of
+    // a cycle: it is deleted anyway (the in-progress operation is aborted) and
+    // the lock is forcibly released right after.
+    const bool cycleInProgress = !tryBeginOperation();
+    if (cycleInProgress) {
+        ESP_LOGW(TAG, "Auto-check task is stopped in the middle of a cycle: "
+                      "the in-progress operation is aborted");
+    }
+
     vTaskDelete(this->taskHandle);
     this->taskHandle = nullptr;
+
+    // Release the lock: either taken just above (task idle between cycles) or
+    // still held by the deleted task. Giving an available binary semaphore is
+    // a harmless no-op, so one unconditional release covers both cases.
+    endOperation();
 }
 
 bool OtamaticClient::isAutoCheckRunning() {
     return this->taskHandle != nullptr;
+}
+
+bool OtamaticClient::tryBeginOperation() {
+    return this->operationLock != nullptr &&
+           xSemaphoreTake(this->operationLock, 0) == pdTRUE;
+}
+
+void OtamaticClient::endOperation() {
+    if (this->operationLock != nullptr) {
+        xSemaphoreGive(this->operationLock);
+    }
 }
 
 void OtamaticClient::onEvent(OtamaticClientEventCallback callback) {
@@ -424,6 +471,7 @@ const char* OtamaticClient::getErrorName(OtamaticClientError error) {
         case OtamaticClientError::SignatureFailed: return "Signature check failed";
         case OtamaticClientError::InvalidImage: return "Invalid image";
         case OtamaticClientError::VerificationFailed: return "Verification failed";
+        case OtamaticClientError::Busy: return "Another operation in progress";
     }
     return "Unknown error";
 }
@@ -432,10 +480,19 @@ void OtamaticClient::autoCheckTask(void* arg) {
     ESP_LOGI(TAG, "Auto-check task started");
 
     while(true) {
-        if (checkForUpdate()) {
-            if (this->config.autoUpdateEnabled) {
-                applyUpdate();
+        // The cycle runs the internals directly under the operation lock: when
+        // the lock is held (a manual checkForUpdate()/applyUpdate() is in
+        // progress) the cycle is skipped and retried at the next interval, so
+        // the automatic check never interferes with manual operations.
+        if (tryBeginOperation()) {
+            if (checkForUpdateInternal() == ESP_OK && pendingUpdate.isValid()) {
+                if (this->config.autoUpdateEnabled) {
+                    applyUpdateInternal();
+                }
             }
+            endOperation();
+        } else {
+            ESP_LOGD(TAG, "Update operation in progress: auto-check cycle skipped");
         }
 
         // TODO: Remove after stack size tune
@@ -448,16 +505,23 @@ void OtamaticClient::autoCheckTask(void* arg) {
 }
 
 bool OtamaticClient::checkForUpdate() {
-    esp_err_t err = checkForUpdateInternal();
-    if (err != ESP_OK || !pendingUpdate.isValid()) {
+    if (!tryBeginOperation()) {
+        ESP_LOGW(TAG, "Another update operation is in progress: check rejected");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::Busy);
         return false;
     }
-    
-    return true;
+
+    esp_err_t err = checkForUpdateInternal();
+    const bool available = err == ESP_OK && pendingUpdate.isValid();
+    endOperation();
+    return available;
 }
 
 esp_err_t OtamaticClient::checkForUpdateInternal() {
-    pendingUpdate.clear();
+    // Note: the pending update is intentionally not cleared here. It is
+    // replaced only when a check completes successfully (and cleared when the
+    // server reports no newer firmware), so a failed check cannot wipe an
+    // update found by a previous check and about to be applied.
 
     transmitEvent(OtamaticClientEvent::CheckingForUpdate);
 
@@ -558,6 +622,9 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
     if (this->config.firmwareVersion >= newVersion) {
         ESP_LOGD(TAG, "Firmware is up to date (version %lu)",
                  static_cast<unsigned long>(this->config.firmwareVersion));
+        // The server confirms there is no newer firmware: any update left
+        // pending by a previous check is stale and must not be applied.
+        pendingUpdate.clear();
         transmitEvent(OtamaticClientEvent::UpdateNotNeeded, OtamaticClientError::None, 0, newVersion);
         return ESP_OK;
     }
@@ -619,10 +686,13 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
         return ESP_FAIL;
     }
 
-    pendingUpdate.version = newVersion;
-    pendingUpdate.size = static_cast<uint32_t>(sizeValue);
-    strlcpy(pendingUpdate.integrity, integrity, sizeof(pendingUpdate.integrity));
-    strlcpy(pendingUpdate.signature, signature, sizeof(pendingUpdate.signature));
+    // Commit the new pending update only after every validation succeeded.
+    OtamaticUpdate fresh;
+    fresh.version = newVersion;
+    fresh.size = static_cast<uint32_t>(sizeValue);
+    strlcpy(fresh.integrity, integrity, sizeof(fresh.integrity));
+    strlcpy(fresh.signature, signature, sizeof(fresh.signature));
+    pendingUpdate = fresh;
 
     transmitEvent(OtamaticClientEvent::UpdateAvailable, OtamaticClientError::None, 0,
                   pendingUpdate.version, pendingUpdate.size);
@@ -631,11 +701,20 @@ esp_err_t OtamaticClient::checkForUpdateInternal() {
 }
 
 bool OtamaticClient::applyUpdate() {
-    if (!pendingUpdate.isValid()) {
-        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
+    if (!tryBeginOperation()) {
+        ESP_LOGW(TAG, "Another update operation is in progress: apply rejected");
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::Busy);
         return false;
     }
-    return applyUpdateInternal() == ESP_OK;
+
+    bool success = false;
+    if (!pendingUpdate.isValid()) {
+        transmitEvent(OtamaticClientEvent::OperationFailed, OtamaticClientError::InvalidCheckData);
+    } else {
+        success = applyUpdateInternal() == ESP_OK;
+    }
+    endOperation();
+    return success;
 }
 
 esp_err_t OtamaticClient::applyUpdateInternal() {

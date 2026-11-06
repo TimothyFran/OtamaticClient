@@ -1,0 +1,15 @@
+# Tabella partizioni OTA per OtamaticClient (flash 4MB).
+#
+# Layout senza partizione factory: il bootloader avvia ota_0 quando la
+# partizione otadata e' vuota, e l'aggiornamento OTA scrive round-robin
+# nell'altro slot (ota_0 <-> ota_1).
+#
+# nvs e phy_init mantengono gli stessi offset della tabella single-app
+# predefinita, cosi' le calibrazioni esistenti sopravvivono al reflash.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+otadata,  data, ota,     0x10000,  0x2000,
+ota_0,    app,  ota_0,   0x20000,  0x1F0000,
+ota_1,    app,  ota_1,   0x210000, 0x1F0000,

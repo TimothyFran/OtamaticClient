@@ -6,6 +6,7 @@
 #include <otamatic/otamatic_update.hpp>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 
 /**
  * @brief OTA client for the Otamatic OTA server.
@@ -15,6 +16,10 @@ class OtamaticClient {
     public:
         OtamaticClient();
         ~OtamaticClient();
+
+        /// @brief The client owns a task and a synchronization lock: copying is not allowed.
+        OtamaticClient(const OtamaticClient&) = delete;
+        OtamaticClient& operator=(const OtamaticClient&) = delete;
 
         /// @brief Initializes the client.
         /// @param config Configuration for the client.
@@ -36,10 +41,14 @@ class OtamaticClient {
         bool isAutoCheckRunning();
 
         /// @brief Checks for a new firmware update
+        /// @details Fails when another operation (e.g. the automatic check) is already in
+        /// progress: an OperationFailed event with the Busy error code is emitted.
         /// @return true if a newer version is available, false if latest version or an error occurred
         bool checkForUpdate();
 
         /// @brief Downloads and installs the latest firmware update
+        /// @details Fails when another operation (e.g. the automatic check) is already in
+        /// progress: an OperationFailed event with the Busy error code is emitted.
         /// @return true if the operation was successful, false otherwise
         bool applyUpdate();
 
@@ -61,6 +70,7 @@ class OtamaticClient {
     private:
         OtamaticConfig config;
         TaskHandle_t taskHandle = nullptr;
+        SemaphoreHandle_t operationLock = nullptr;
         OtamaticUpdate pendingUpdate;
 
         OtamaticClientEventCallback eventCallback = nullptr;
@@ -79,6 +89,13 @@ class OtamaticClient {
             instance->autoCheckTask(pvParameters);
         }
         void autoCheckTask(void* pvParameters);
+
+        /// @brief Tries to acquire the operation lock without blocking.
+        /// @return true when the caller may run an operation (the lock is held).
+        bool tryBeginOperation();
+
+        /// @brief Releases the operation lock acquired with tryBeginOperation().
+        void endOperation();
 
         esp_err_t checkForUpdateInternal();
         esp_err_t applyUpdateInternal();

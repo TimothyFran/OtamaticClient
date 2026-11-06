@@ -65,6 +65,8 @@ enum class OtamaticClientError : uint8_t {
     InvalidImage,
     /// The post-boot firmware verification failed.
     VerificationFailed,
+    /// Another operation (e.g. the automatic check) is already in progress.
+    Busy,
 };
 
 /**
